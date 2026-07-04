@@ -4,18 +4,10 @@
 #include <windows.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <wchar.h>
 
-#ifndef TRUE
-#define TRUE 1
-#endif
-#ifndef FALSE
-#define FALSE 0
-#endif
-
-#include "tui.h"
-#include "../core/process/process.h"
-#include "../core/memory/memory.h"
-#include "../platform/platform.h"
+#include "core/process/process.h"
+#include "core/memory/memory.h"
 
 #define SIDEBAR_WIDTH   12
 #define HEADER_ROW      1
@@ -94,15 +86,10 @@ static void draw_text(CHAR_INFO *buf, int x, int y, const wchar_t *text, WORD at
     }
 }
 
-static int draw_text_len(const wchar_t *text)
-{
-    return (int)wcslen(text);
-}
-
 static void draw_text_right(CHAR_INFO *buf, int right_x, int y, const wchar_t *text, WORD attr)
 {
-    int len = draw_text_len(text);
-    int x = right_x - len + 1;
+    size_t len = wcslen(text);
+    int x = right_x - (int)len + 1;
     if (x < 0) x = 0;
     draw_text(buf, x, y, text, attr);
 }
@@ -209,7 +196,7 @@ static void draw_process_list(CHAR_INFO *buf)
         WORD attr = (pi == g.proc_sel && g.focus == FOCUS_MAIN)
                       ? g_attr_sel : g_attr_normal;
         draw_text(buf, main_x, row, line, attr);
-        int used = draw_text_len(line);
+        int used = (int)wcslen(line);
         for (int x = main_x + used; x < g.w - 1; x++) {
             set_cell(buf, x, row, L' ', attr);
         }
@@ -298,9 +285,34 @@ static void refresh_process_list(void)
     g.proc_sel   = 0;
     g.proc_scroll = 0;
 
-    if (proc_enumerate(&g.procs, &g.proc_count) != 0) {
+    PlatError err = proc_enumerate(&g.procs, &g.proc_count);
+    if (err != PLAT_OK) {
         set_status(L"Failed to enumerate processes", TRUE);
     }
+}
+
+static int do_attach(DWORD pid)
+{
+    if (g.attached) {
+        proc_detach(&g.target);
+        g.attached = 0;
+    }
+
+    proc_enable_privilege();
+
+    PlatError err = proc_attach(pid, &g.target);
+    if (err != PLAT_OK) {
+        wchar_t msg[512];
+        swprintf_s(msg, 512, L"Failed to attach to PID %u: %S", pid, proc_last_error_string());
+        set_status(msg, TRUE);
+        return 0;
+    }
+
+    g.attached = 1;
+    wchar_t msg[256];
+    swprintf_s(msg, 256, L"Attached to %s (PID %u)", g.target.name, pid);
+    set_status(msg, FALSE);
+    return 1;
 }
 
 static void attach_to_selected(void)
@@ -308,25 +320,79 @@ static void attach_to_selected(void)
     if (!g.procs || g.proc_count == 0) return;
     if ((unsigned int)g.proc_sel >= g.proc_count) return;
 
-    DWORD pid = g.procs[g.proc_sel].pid;
+    do_attach(g.procs[g.proc_sel].pid);
+}
 
-    if (g.attached) {
-        proc_detach(&g.target);
-        g.attached = FALSE;
+static void cmd_read(const wchar_t *args)
+{
+    if (!g.attached) {
+        set_status(L"No process attached", TRUE);
+        return;
     }
 
-    plat_enable_debug_privilege();
+    unsigned long long addr = 0;
+    int size = 0;
+    if (swscanf_s(args, L"%llx %d", &addr, &size) != 2 || size <= 0 || size > 512) {
+        set_status(L"usage: read <hex_address> <size_in_bytes>", TRUE);
+        return;
+    }
 
-    if (proc_attach(pid, &g.target) != 0) {
-        wchar_t msg[512];
-        swprintf_s(msg, 512, L"Failed to attach to PID %u: %S", pid, proc_last_error_string());
+    unsigned char buf[512];
+    PlatError err = mem_read(&g.target, addr, buf, (size_t)size);
+    if (err != PLAT_OK) {
+        wchar_t msg[256];
+        swprintf_s(msg, 256, L"read failed: %S", proc_last_error_string());
         set_status(msg, TRUE);
         return;
     }
 
-    g.attached = TRUE;
+    wchar_t result[512];
+    int pos = 0;
+    for (int i = 0; i < size && pos < 500; i++) {
+        pos += swprintf_s(result + pos, 512 - pos, L"%02X ", buf[i]);
+    }
+    set_status(result, FALSE);
+}
+
+static void cmd_write(const wchar_t *args)
+{
+    if (!g.attached) {
+        set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    unsigned long long addr = 0;
+    wchar_t hex[256] = {0};
+    if (swscanf_s(args, L"%llx %s", &addr, hex, (unsigned int)(sizeof(hex) / sizeof(wchar_t))) != 2) {
+        set_status(L"usage: write <hex_address> <hex_bytes>", TRUE);
+        return;
+    }
+
+    unsigned char buf[128];
+    int hex_len = (int)wcslen(hex);
+    int byte_count = hex_len / 2;
+    if (byte_count == 0 || byte_count > 128 || hex_len % 2 != 0) {
+        set_status(L"invalid hex string — even number of hex chars required", TRUE);
+        return;
+    }
+
+    for (int i = 0; i < byte_count; i++) {
+        if (swscanf_s(hex + (i * 2), L"%2hhx", &buf[i]) != 1) {
+            set_status(L"invalid hex string — non-hex characters found", TRUE);
+            return;
+        }
+    }
+
+    PlatError err = mem_write(&g.target, addr, buf, (size_t)byte_count);
+    if (err != PLAT_OK) {
+        wchar_t msg[256];
+        swprintf_s(msg, 256, L"write failed: %S", proc_last_error_string());
+        set_status(msg, TRUE);
+        return;
+    }
+
     wchar_t msg[256];
-    swprintf_s(msg, 256, L"Attached to %s (PID %u)", g.target.name, pid);
+    swprintf_s(msg, 256, L"Wrote %d byte(s) to 0x%llX", byte_count, addr);
     set_status(msg, FALSE);
 }
 
@@ -335,7 +401,7 @@ static void exec_command(void)
     if (g.cmd_len == 0) return;
 
     if (wcscmp(g.cmd_buf, L"quit") == 0 || wcscmp(g.cmd_buf, L"exit") == 0) {
-        g.running = FALSE;
+        g.running = 0;
         g.cmd_len = 0;
         return;
     }
@@ -345,21 +411,7 @@ static void exec_command(void)
         if (pid == 0) {
             set_status(L"Invalid PID", TRUE);
         } else {
-            if (g.attached) {
-                proc_detach(&g.target);
-                g.attached = FALSE;
-            }
-            plat_enable_debug_privilege();
-            if (proc_attach(pid, &g.target) != 0) {
-                wchar_t msg[512];
-                swprintf_s(msg, 512, L"Failed to attach to PID %u: %S", pid, proc_last_error_string());
-                set_status(msg, TRUE);
-            } else {
-                g.attached = TRUE;
-                wchar_t msg[256];
-                swprintf_s(msg, 256, L"Attached to %s (PID %u)", g.target.name, pid);
-                set_status(msg, FALSE);
-            }
+            do_attach(pid);
         }
         g.cmd_len = 0;
         return;
@@ -368,11 +420,23 @@ static void exec_command(void)
     if (wcscmp(g.cmd_buf, L"detach") == 0) {
         if (g.attached) {
             proc_detach(&g.target);
-            g.attached = FALSE;
+            g.attached = 0;
             set_status(L"Detached", FALSE);
         } else {
             set_status(L"No process attached", TRUE);
         }
+        g.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(g.cmd_buf, L"read ", 5) == 0) {
+        cmd_read(g.cmd_buf + 5);
+        g.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(g.cmd_buf, L"write ", 6) == 0) {
+        cmd_write(g.cmd_buf + 6);
         g.cmd_len = 0;
         return;
     }
@@ -395,7 +459,7 @@ static void handle_key(WORD vk, WCHAR ch)
             g.panel = g.sidebar_idx;
             g.focus = FOCUS_MAIN;
         } else if (ch == L'q' || ch == L'Q') {
-            g.running = FALSE;
+            g.running = 0;
         }
         break;
 
@@ -496,10 +560,10 @@ int tui_init(void)
     g.panel        = PANEL_PROCESSES;
     g.sidebar_idx  = 0;
     g.focus        = FOCUS_SIDEBAR;
-    g.running      = TRUE;
+    g.running      = 1;
 
     memset(&g.target, 0, sizeof(g.target));
-    g.attached = FALSE;
+    g.attached = 0;
 
     refresh_process_list();
 
@@ -520,7 +584,7 @@ void tui_shutdown(void)
 
     if (g.attached) {
         proc_detach(&g.target);
-        g.attached = FALSE;
+        g.attached = 0;
     }
 
     if (g.procs) {
@@ -528,7 +592,10 @@ void tui_shutdown(void)
         g.procs = NULL;
     }
 
-    system("cls");
+    DWORD written;
+    COORD zero = {0, 0};
+    FillConsoleOutputCharacterW(g.hOut, L' ', (DWORD)(g.w * g.h), zero, &written);
+    SetConsoleCursorPosition(g.hOut, zero);
 }
 
 void tui_run(void)

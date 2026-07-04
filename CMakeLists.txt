@@ -19,4 +19,5 @@ target_include_directories(memforge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(test_target
     test_target/main.c
 )
-target_compile_options(test_target PRIVATE /W4)
+target_compile_options(test_target PRIVATE /W4 /WX)
+target_link_libraries(memforge PRIVATE psapi)

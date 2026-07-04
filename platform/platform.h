@@ -49,10 +49,11 @@ PlatError  plat_write_memory(void *handle, unsigned long long address, const voi
 
 PlatError  plat_query_region(void *handle, unsigned long long address, PlatRegionInfo *info);
 
-PlatError  plat_get_main_module(unsigned int pid, void *handle, PlatModuleInfo *info);
+PlatError  plat_get_main_module(void *handle, PlatModuleInfo *info);
 
 PlatError  plat_enable_debug_privilege(void);
 
 unsigned int plat_last_error(void);
+PlatError    plat_last_err(void);
 
 #endif

@@ -11,8 +11,8 @@ typedef struct {
     unsigned int       state;
 } MemRegion;
 
-int mem_read(const Target *target, unsigned long long address, void *buffer, size_t size);
-int mem_write(const Target *target, unsigned long long address, const void *buffer, size_t size);
-int mem_query(const Target *target, unsigned long long address, MemRegion *region);
+PlatError mem_read(const Target *target, unsigned long long address, void *buffer, size_t size);
+PlatError mem_write(const Target *target, unsigned long long address, const void *buffer, size_t size);
+PlatError mem_query(const Target *target, unsigned long long address, MemRegion *region);
 
 #endif

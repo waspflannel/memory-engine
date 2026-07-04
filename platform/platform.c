@@ -7,22 +7,30 @@
 #include "platform/platform.h"
 
 static unsigned int g_plat_last_error = 0;
+static PlatError    g_plat_last_err    = PLAT_OK;
 
 unsigned int plat_last_error(void)
 {
     return g_plat_last_error;
 }
 
+PlatError plat_last_err(void)
+{
+    return g_plat_last_err;
+}
+
 PlatError plat_enable_debug_privilege(void)
 {
     HANDLE token = NULL;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
+        g_plat_last_err    = PLAT_ERR_PRIVILEGE_FAILED;
         g_plat_last_error = (unsigned int)GetLastError();
         return PLAT_ERR_PRIVILEGE_FAILED;
     }
 
     TOKEN_PRIVILEGES tp = {0};
     if (!LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &tp.Privileges[0].Luid)) {
+        g_plat_last_err    = PLAT_ERR_PRIVILEGE_FAILED;
         g_plat_last_error = (unsigned int)GetLastError();
         CloseHandle(token);
         return PLAT_ERR_PRIVILEGE_FAILED;
@@ -36,16 +44,19 @@ PlatError plat_enable_debug_privilege(void)
     CloseHandle(token);
 
     if (err != ERROR_SUCCESS) {
+        g_plat_last_err    = PLAT_ERR_PRIVILEGE_FAILED;
         g_plat_last_error = (unsigned int)err;
         return PLAT_ERR_PRIVILEGE_FAILED;
     }
 
+    g_plat_last_err = PLAT_OK;
     return PLAT_OK;
 }
 
 PlatError plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *count)
 {
     if (!entries || !count) {
+        g_plat_last_err = PLAT_ERR_INVALID_PARAM;
         return PLAT_ERR_INVALID_PARAM;
     }
 
@@ -54,6 +65,7 @@ PlatError plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *cou
 
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) {
+        g_plat_last_err    = PLAT_ERR_SNAPSHOT_FAILED;
         g_plat_last_error = (unsigned int)GetLastError();
         return PLAT_ERR_SNAPSHOT_FAILED;
     }
@@ -65,6 +77,7 @@ PlatError plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *cou
 
     list = (PlatProcessEntry *)HeapAlloc(GetProcessHeap(), 0, capacity * sizeof(PlatProcessEntry));
     if (!list) {
+        g_plat_last_err    = PLAT_ERR_INTERNAL;
         g_plat_last_error = (unsigned int)ERROR_OUTOFMEMORY;
         CloseHandle(snap);
         return PLAT_ERR_INTERNAL;
@@ -81,6 +94,7 @@ PlatError plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *cou
                 if (!temp) {
                     HeapFree(GetProcessHeap(), 0, list);
                     CloseHandle(snap);
+                    g_plat_last_err    = PLAT_ERR_INTERNAL;
                     g_plat_last_error = (unsigned int)ERROR_OUTOFMEMORY;
                     return PLAT_ERR_INTERNAL;
                 }
@@ -99,11 +113,13 @@ PlatError plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *cou
 
     if (n == 0) {
         HeapFree(GetProcessHeap(), 0, list);
+        g_plat_last_err = PLAT_OK;
         return PLAT_OK;
     }
 
     *entries = list;
     *count = n;
+    g_plat_last_err = PLAT_OK;
     return PLAT_OK;
 }
 
@@ -117,12 +133,14 @@ void plat_free_process_list(PlatProcessEntry *entries)
 PlatError plat_open_process(unsigned int pid, void **handle)
 {
     if (!handle) {
+        g_plat_last_err = PLAT_ERR_INVALID_PARAM;
         return PLAT_ERR_INVALID_PARAM;
     }
 
     *handle = NULL;
 
     if (pid == 0 || pid == (unsigned int)GetCurrentProcessId()) {
+        g_plat_last_err    = PLAT_ERR_INVALID_PARAM;
         g_plat_last_error = (unsigned int)ERROR_INVALID_PARAMETER;
         return PLAT_ERR_INVALID_PARAM;
     }
@@ -135,12 +153,15 @@ PlatError plat_open_process(unsigned int pid, void **handle)
     if (!h) {
         g_plat_last_error = (unsigned int)GetLastError();
         if (g_plat_last_error == ERROR_ACCESS_DENIED) {
+            g_plat_last_err = PLAT_ERR_ACCESS_DENIED;
             return PLAT_ERR_ACCESS_DENIED;
         }
+        g_plat_last_err = PLAT_ERR_NOT_FOUND;
         return PLAT_ERR_NOT_FOUND;
     }
 
     *handle = h;
+    g_plat_last_err = PLAT_OK;
     return PLAT_OK;
 }
 
@@ -155,6 +176,7 @@ PlatError plat_read_memory(void *handle, unsigned long long address, void *buffe
 {
     if (!handle || !buffer || size == 0) {
         if (bytes_read) *bytes_read = 0;
+        g_plat_last_err = PLAT_ERR_INVALID_PARAM;
         return PLAT_ERR_INVALID_PARAM;
     }
 
@@ -168,11 +190,14 @@ PlatError plat_read_memory(void *handle, unsigned long long address, void *buffe
     if (!ok) {
         g_plat_last_error = (unsigned int)GetLastError();
         if (local_bytes > 0) {
+            g_plat_last_err = PLAT_ERR_PARTIAL_READ;
             return PLAT_ERR_PARTIAL_READ;
         }
+        g_plat_last_err = PLAT_ERR_READ_FAILED;
         return PLAT_ERR_READ_FAILED;
     }
 
+    g_plat_last_err = PLAT_OK;
     return PLAT_OK;
 }
 
@@ -180,6 +205,7 @@ PlatError plat_write_memory(void *handle, unsigned long long address, const void
 {
     if (!handle || !buffer || size == 0) {
         if (bytes_written) *bytes_written = 0;
+        g_plat_last_err = PLAT_ERR_INVALID_PARAM;
         return PLAT_ERR_INVALID_PARAM;
     }
 
@@ -193,17 +219,21 @@ PlatError plat_write_memory(void *handle, unsigned long long address, const void
     if (!ok) {
         g_plat_last_error = (unsigned int)GetLastError();
         if (local_bytes > 0) {
+            g_plat_last_err = PLAT_ERR_PARTIAL_WRITE;
             return PLAT_ERR_PARTIAL_WRITE;
         }
+        g_plat_last_err = PLAT_ERR_WRITE_FAILED;
         return PLAT_ERR_WRITE_FAILED;
     }
 
+    g_plat_last_err = PLAT_OK;
     return PLAT_OK;
 }
 
 PlatError plat_query_region(void *handle, unsigned long long address, PlatRegionInfo *info)
 {
     if (!handle || !info) {
+        g_plat_last_err = PLAT_ERR_INVALID_PARAM;
         return PLAT_ERR_INVALID_PARAM;
     }
 
@@ -211,6 +241,7 @@ PlatError plat_query_region(void *handle, unsigned long long address, PlatRegion
     SIZE_T ret = VirtualQueryEx((HANDLE)handle, (LPCVOID)(UINT_PTR)address, &mbi, sizeof(mbi));
 
     if (ret == 0) {
+        g_plat_last_err    = PLAT_ERR_QUERY_FAILED;
         g_plat_last_error = (unsigned int)GetLastError();
         return PLAT_ERR_QUERY_FAILED;
     }
@@ -221,14 +252,14 @@ PlatError plat_query_region(void *handle, unsigned long long address, PlatRegion
     info->state   = (unsigned int)mbi.State;
     info->type    = (unsigned int)mbi.Type;
 
+    g_plat_last_err = PLAT_OK;
     return PLAT_OK;
 }
 
-PlatError plat_get_main_module(unsigned int pid, void *handle, PlatModuleInfo *info)
+PlatError plat_get_main_module(void *handle, PlatModuleInfo *info)
 {
-    (void)pid;
-
     if (!handle || !info) {
+        g_plat_last_err = PLAT_ERR_INVALID_PARAM;
         return PLAT_ERR_INVALID_PARAM;
     }
 
@@ -236,17 +267,20 @@ PlatError plat_get_main_module(unsigned int pid, void *handle, PlatModuleInfo *i
     DWORD needed = 0;
 
     if (!EnumProcessModules((HANDLE)handle, modules, sizeof(modules), &needed)) {
+        g_plat_last_err    = PLAT_ERR_MODULE_FAILED;
         g_plat_last_error = (unsigned int)GetLastError();
         return PLAT_ERR_MODULE_FAILED;
     }
 
     if (needed == 0) {
+        g_plat_last_err    = PLAT_ERR_MODULE_FAILED;
         g_plat_last_error = (unsigned int)ERROR_NOT_FOUND;
         return PLAT_ERR_MODULE_FAILED;
     }
 
     MODULEINFO modInfo = {0};
     if (!GetModuleInformation((HANDLE)handle, modules[0], &modInfo, sizeof(modInfo))) {
+        g_plat_last_err    = PLAT_ERR_MODULE_FAILED;
         g_plat_last_error = (unsigned int)GetLastError();
         return PLAT_ERR_MODULE_FAILED;
     }
@@ -256,9 +290,11 @@ PlatError plat_get_main_module(unsigned int pid, void *handle, PlatModuleInfo *i
 
     DWORD nameLen = GetModuleBaseNameW((HANDLE)handle, modules[0], info->name, 260);
     if (nameLen == 0) {
+        g_plat_last_err    = PLAT_ERR_MODULE_FAILED;
         g_plat_last_error = (unsigned int)GetLastError();
         return PLAT_ERR_MODULE_FAILED;
     }
 
+    g_plat_last_err = PLAT_OK;
     return PLAT_OK;
 }
