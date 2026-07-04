@@ -53,7 +53,7 @@ PlatError  plat_get_main_module(void *handle, PlatModuleInfo *info);
 
 PlatError  plat_enable_debug_privilege(void);
 
-unsigned int plat_last_error(void);
+unsigned int plat_last_os_error(void);
 PlatError    plat_last_err(void);
 
 #endif

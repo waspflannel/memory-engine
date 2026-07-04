@@ -6,12 +6,12 @@
 #include <psapi.h>
 #include "platform/platform.h"
 
-static unsigned int g_plat_last_error = 0;
+static unsigned int g_plat_last_os_error = 0;
 static PlatError    g_plat_last_err    = PLAT_OK;
 
-unsigned int plat_last_error(void)
+unsigned int plat_last_os_error(void)
 {
-    return g_plat_last_error;
+    return g_plat_last_os_error;
 }
 
 PlatError plat_last_err(void)
@@ -24,14 +24,14 @@ PlatError plat_enable_debug_privilege(void)
     HANDLE token = NULL;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
         g_plat_last_err    = PLAT_ERR_PRIVILEGE_FAILED;
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         return PLAT_ERR_PRIVILEGE_FAILED;
     }
 
     TOKEN_PRIVILEGES tp = {0};
     if (!LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &tp.Privileges[0].Luid)) {
         g_plat_last_err    = PLAT_ERR_PRIVILEGE_FAILED;
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         CloseHandle(token);
         return PLAT_ERR_PRIVILEGE_FAILED;
     }
@@ -45,7 +45,7 @@ PlatError plat_enable_debug_privilege(void)
 
     if (err != ERROR_SUCCESS) {
         g_plat_last_err    = PLAT_ERR_PRIVILEGE_FAILED;
-        g_plat_last_error = (unsigned int)err;
+        g_plat_last_os_error = (unsigned int)err;
         return PLAT_ERR_PRIVILEGE_FAILED;
     }
 
@@ -66,7 +66,7 @@ PlatError plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *cou
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) {
         g_plat_last_err    = PLAT_ERR_SNAPSHOT_FAILED;
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         return PLAT_ERR_SNAPSHOT_FAILED;
     }
 
@@ -78,7 +78,7 @@ PlatError plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *cou
     list = (PlatProcessEntry *)HeapAlloc(GetProcessHeap(), 0, capacity * sizeof(PlatProcessEntry));
     if (!list) {
         g_plat_last_err    = PLAT_ERR_INTERNAL;
-        g_plat_last_error = (unsigned int)ERROR_OUTOFMEMORY;
+        g_plat_last_os_error = (unsigned int)ERROR_OUTOFMEMORY;
         CloseHandle(snap);
         return PLAT_ERR_INTERNAL;
     }
@@ -95,7 +95,7 @@ PlatError plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *cou
                     HeapFree(GetProcessHeap(), 0, list);
                     CloseHandle(snap);
                     g_plat_last_err    = PLAT_ERR_INTERNAL;
-                    g_plat_last_error = (unsigned int)ERROR_OUTOFMEMORY;
+                    g_plat_last_os_error = (unsigned int)ERROR_OUTOFMEMORY;
                     return PLAT_ERR_INTERNAL;
                 }
                 memcpy(temp, list, n * sizeof(PlatProcessEntry));
@@ -141,7 +141,7 @@ PlatError plat_open_process(unsigned int pid, void **handle)
 
     if (pid == 0 || pid == (unsigned int)GetCurrentProcessId()) {
         g_plat_last_err    = PLAT_ERR_INVALID_PARAM;
-        g_plat_last_error = (unsigned int)ERROR_INVALID_PARAMETER;
+        g_plat_last_os_error = (unsigned int)ERROR_INVALID_PARAMETER;
         return PLAT_ERR_INVALID_PARAM;
     }
 
@@ -151,8 +151,8 @@ PlatError plat_open_process(unsigned int pid, void **handle)
         FALSE, (DWORD)pid);
 
     if (!h) {
-        g_plat_last_error = (unsigned int)GetLastError();
-        if (g_plat_last_error == ERROR_ACCESS_DENIED) {
+        g_plat_last_os_error = (unsigned int)GetLastError();
+        if (g_plat_last_os_error == ERROR_ACCESS_DENIED) {
             g_plat_last_err = PLAT_ERR_ACCESS_DENIED;
             return PLAT_ERR_ACCESS_DENIED;
         }
@@ -188,7 +188,7 @@ PlatError plat_read_memory(void *handle, unsigned long long address, void *buffe
     }
 
     if (!ok) {
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         if (local_bytes > 0) {
             g_plat_last_err = PLAT_ERR_PARTIAL_READ;
             return PLAT_ERR_PARTIAL_READ;
@@ -217,7 +217,7 @@ PlatError plat_write_memory(void *handle, unsigned long long address, const void
     }
 
     if (!ok) {
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         if (local_bytes > 0) {
             g_plat_last_err = PLAT_ERR_PARTIAL_WRITE;
             return PLAT_ERR_PARTIAL_WRITE;
@@ -242,7 +242,7 @@ PlatError plat_query_region(void *handle, unsigned long long address, PlatRegion
 
     if (ret == 0) {
         g_plat_last_err    = PLAT_ERR_QUERY_FAILED;
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         return PLAT_ERR_QUERY_FAILED;
     }
 
@@ -268,20 +268,20 @@ PlatError plat_get_main_module(void *handle, PlatModuleInfo *info)
 
     if (!EnumProcessModules((HANDLE)handle, modules, sizeof(modules), &needed)) {
         g_plat_last_err    = PLAT_ERR_MODULE_FAILED;
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         return PLAT_ERR_MODULE_FAILED;
     }
 
     if (needed == 0) {
         g_plat_last_err    = PLAT_ERR_MODULE_FAILED;
-        g_plat_last_error = (unsigned int)ERROR_NOT_FOUND;
+        g_plat_last_os_error = (unsigned int)ERROR_NOT_FOUND;
         return PLAT_ERR_MODULE_FAILED;
     }
 
     MODULEINFO modInfo = {0};
     if (!GetModuleInformation((HANDLE)handle, modules[0], &modInfo, sizeof(modInfo))) {
         g_plat_last_err    = PLAT_ERR_MODULE_FAILED;
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         return PLAT_ERR_MODULE_FAILED;
     }
 
@@ -291,7 +291,7 @@ PlatError plat_get_main_module(void *handle, PlatModuleInfo *info)
     DWORD nameLen = GetModuleBaseNameW((HANDLE)handle, modules[0], info->name, 260);
     if (nameLen == 0) {
         g_plat_last_err    = PLAT_ERR_MODULE_FAILED;
-        g_plat_last_error = (unsigned int)GetLastError();
+        g_plat_last_os_error = (unsigned int)GetLastError();
         return PLAT_ERR_MODULE_FAILED;
     }
 

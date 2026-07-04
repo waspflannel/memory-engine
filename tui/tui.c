@@ -295,7 +295,7 @@ static int do_attach(DWORD pid)
 {
     if (g.attached) {
         proc_detach(&g.target);
-        g.attached = 0;
+        g.attached = FALSE;
     }
 
     proc_enable_privilege();
@@ -303,12 +303,12 @@ static int do_attach(DWORD pid)
     PlatError err = proc_attach(pid, &g.target);
     if (err != PLAT_OK) {
         wchar_t msg[512];
-        swprintf_s(msg, 512, L"Failed to attach to PID %u: %S", pid, proc_last_error_string());
+        swprintf_s(msg, 512, L"Failed to attach to PID %u: %S", pid, proc_error_string(err));
         set_status(msg, TRUE);
         return 0;
     }
 
-    g.attached = 1;
+    g.attached = TRUE;
     wchar_t msg[256];
     swprintf_s(msg, 256, L"Attached to %s (PID %u)", g.target.name, pid);
     set_status(msg, FALSE);
@@ -341,7 +341,7 @@ static void cmd_read(const wchar_t *args)
     PlatError err = mem_read(&g.target, addr, buf, (size_t)size);
     if (err != PLAT_OK) {
         wchar_t msg[256];
-        swprintf_s(msg, 256, L"read failed: %S", proc_last_error_string());
+        swprintf_s(msg, 256, L"read failed: %S", proc_error_string(err));
         set_status(msg, TRUE);
         return;
     }
@@ -376,17 +376,22 @@ static void cmd_write(const wchar_t *args)
         return;
     }
 
-    for (int i = 0; i < byte_count; i++) {
-        if (swscanf_s(hex + (i * 2), L"%2hhx", &buf[i]) != 1) {
+    for (int i = 0; i < hex_len; i++) {
+        wchar_t c = hex[i];
+        if (!((c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F') || (c >= L'a' && c <= L'f'))) {
             set_status(L"invalid hex string — non-hex characters found", TRUE);
             return;
         }
     }
 
+    for (int i = 0; i < byte_count; i++) {
+        swscanf_s(hex + (i * 2), L"%2hhx", &buf[i]);
+    }
+
     PlatError err = mem_write(&g.target, addr, buf, (size_t)byte_count);
     if (err != PLAT_OK) {
         wchar_t msg[256];
-        swprintf_s(msg, 256, L"write failed: %S", proc_last_error_string());
+        swprintf_s(msg, 256, L"write failed: %S", proc_error_string(err));
         set_status(msg, TRUE);
         return;
     }
@@ -401,7 +406,7 @@ static void exec_command(void)
     if (g.cmd_len == 0) return;
 
     if (wcscmp(g.cmd_buf, L"quit") == 0 || wcscmp(g.cmd_buf, L"exit") == 0) {
-        g.running = 0;
+        g.running = FALSE;
         g.cmd_len = 0;
         return;
     }
@@ -420,7 +425,7 @@ static void exec_command(void)
     if (wcscmp(g.cmd_buf, L"detach") == 0) {
         if (g.attached) {
             proc_detach(&g.target);
-            g.attached = 0;
+            g.attached = FALSE;
             set_status(L"Detached", FALSE);
         } else {
             set_status(L"No process attached", TRUE);
@@ -459,7 +464,7 @@ static void handle_key(WORD vk, WCHAR ch)
             g.panel = g.sidebar_idx;
             g.focus = FOCUS_MAIN;
         } else if (ch == L'q' || ch == L'Q') {
-            g.running = 0;
+            g.running = FALSE;
         }
         break;
 
@@ -560,10 +565,10 @@ int tui_init(void)
     g.panel        = PANEL_PROCESSES;
     g.sidebar_idx  = 0;
     g.focus        = FOCUS_SIDEBAR;
-    g.running      = 1;
+    g.running      = TRUE;
 
     memset(&g.target, 0, sizeof(g.target));
-    g.attached = 0;
+    g.attached = FALSE;
 
     refresh_process_list();
 
@@ -584,7 +589,7 @@ void tui_shutdown(void)
 
     if (g.attached) {
         proc_detach(&g.target);
-        g.attached = 0;
+        g.attached = FALSE;
     }
 
     if (g.procs) {

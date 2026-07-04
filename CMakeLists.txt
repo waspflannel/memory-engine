@@ -21,3 +21,16 @@ add_executable(test_target
 )
 target_compile_options(test_target PRIVATE /W4 /WX)
 target_link_libraries(memforge PRIVATE psapi)
+
+add_executable(core_tests
+    test/core_tests.c
+    core/process/process.c
+    core/memory/memory.c
+    platform/platform.c
+)
+target_compile_options(core_tests PRIVATE /W4 /WX)
+target_include_directories(core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(core_tests PRIVATE psapi)
+
+enable_testing()
+add_test(NAME core_tests COMMAND core_tests)

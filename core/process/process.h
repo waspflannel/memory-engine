@@ -28,6 +28,7 @@ void        proc_detach(Target *target);
 PlatError   proc_enable_privilege(void);
 
 int         proc_last_error(void);
+const char *proc_error_string(PlatError err);
 const char *proc_last_error_string(void);
 
 #endif

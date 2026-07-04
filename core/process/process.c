@@ -5,6 +5,10 @@
 
 PlatError proc_enumerate(ProcessEntry **entries, unsigned int *count)
 {
+    if (!entries || !count) {
+        return PLAT_ERR_INVALID_PARAM;
+    }
+
     PlatProcessEntry *plat_entries = NULL;
     unsigned int plat_count = 0;
 
@@ -82,12 +86,13 @@ PlatError proc_enable_privilege(void)
 
 int proc_last_error(void)
 {
-    return (int)plat_last_error();
+    return (int)plat_last_os_error();
 }
 
-const char *proc_last_error_string(void)
+const char *proc_error_string(PlatError err)
 {
-    switch (plat_last_err()) {
+    switch (err) {
+    case PLAT_OK:                  return "no error";
     case PLAT_ERR_ACCESS_DENIED:   return "access denied (try running as administrator)";
     case PLAT_ERR_NOT_FOUND:       return "process not found";
     case PLAT_ERR_MODULE_FAILED:   return "failed to query module info";
@@ -102,4 +107,9 @@ const char *proc_last_error_string(void)
     case PLAT_ERR_INTERNAL:        return "internal error (out of memory)";
     default:                       return "unknown error";
     }
+}
+
+const char *proc_last_error_string(void)
+{
+    return proc_error_string(plat_last_err());
 }
