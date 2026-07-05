@@ -61,8 +61,8 @@ static WORD g_attr_error  = 0;
 static struct {
     HANDLE hOut;
     HANDLE hIn;
-    int    w;
-    int    h;
+    int    width;
+    int    height;
 
     int focus;
     int panel;
@@ -93,16 +93,16 @@ static void draw_borders(Screen *screen)
     WORD attr = g_attr_border;
 
     screen_put(screen, 0,           0,             BOX_TL, attr);
-    screen_put(screen, tui_state.w - 1,     0,             BOX_TR, attr);
-    screen_put(screen, 0,           tui_state.h - 1,       BOX_BL, attr);
-    screen_put(screen, tui_state.w - 1,     tui_state.h - 1,       BOX_BR, attr);
+    screen_put(screen, tui_state.width - 1,     0,             BOX_TR, attr);
+    screen_put(screen, 0,           tui_state.height - 1,       BOX_BL, attr);
+    screen_put(screen, tui_state.width - 1,     tui_state.height - 1,       BOX_BR, attr);
 
-    screen_fill_row(screen, 0,       BOX_H, attr, 1, tui_state.w - 2);
-    screen_fill_row(screen, tui_state.h - 1, BOX_H, attr, 1, tui_state.w - 2);
+    screen_fill_row(screen, 0,       BOX_H, attr, 1, tui_state.width - 2);
+    screen_fill_row(screen, tui_state.height - 1, BOX_H, attr, 1, tui_state.width - 2);
 
-    for (int y = 1; y < tui_state.h - 1; y++) {
+    for (int y = 1; y < tui_state.height - 1; y++) {
         screen_put(screen, 0,       y, BOX_V, attr);
-        screen_put(screen, tui_state.w - 1, y, BOX_V, attr);
+        screen_put(screen, tui_state.width - 1, y, BOX_V, attr);
     }
 }
 
@@ -112,14 +112,14 @@ static void draw_sep_row(Screen *screen, int y, int split)
     int sb_end = 1 + SIDEBAR_WIDTH;
 
     screen_put(screen, 0,       y, BOX_TLEFT,  attr);
-    screen_put(screen, tui_state.w - 1, y, BOX_TRIGHT, attr);
+    screen_put(screen, tui_state.width - 1, y, BOX_TRIGHT, attr);
 
     if (split) {
         screen_fill_row(screen, y, BOX_H, attr, 1, sb_end - 1);
         screen_put(screen, sb_end, y, BOX_TTOP, attr);
-        screen_fill_row(screen, y, BOX_H, attr, sb_end + 1, tui_state.w - 2);
+        screen_fill_row(screen, y, BOX_H, attr, sb_end + 1, tui_state.width - 2);
     } else {
-        screen_fill_row(screen, y, BOX_H, attr, 1, tui_state.w - 2);
+        screen_fill_row(screen, y, BOX_H, attr, 1, tui_state.width - 2);
     }
 }
 
@@ -133,10 +133,10 @@ static void draw_header(Screen *screen)
     } else {
         swprintf_s(status, 128, L"[No process attached]");
     }
-    screen_text_right(screen, tui_state.w - 2, HEADER_ROW, status, g_attr_header);
+    screen_text_right(screen, tui_state.width - 2, HEADER_ROW, status, g_attr_header);
 
     screen_put(screen, 0,       HEADER_ROW, BOX_V, g_attr_border);
-    screen_put(screen, tui_state.w - 1, HEADER_ROW, BOX_V, g_attr_border);
+    screen_put(screen, tui_state.width - 1, HEADER_ROW, BOX_V, g_attr_border);
 }
 
 static void draw_sidebar(Screen *screen)
@@ -145,7 +145,7 @@ static void draw_sidebar(Screen *screen)
 
     for (int i = 0; i < PANEL_COUNT; i++) {
         int row = CONTENT_START + i;
-        if (row >= tui_state.h - 2) break;
+        if (row >= tui_state.height - 2) break;
 
         WORD attr = (i == tui_state.sidebar_idx && tui_state.focus == FOCUS_SIDEBAR)
                       ? g_attr_sel : g_attr_normal;
@@ -160,10 +160,10 @@ static void draw_sidebar(Screen *screen)
 static void draw_process_list(Screen *screen)
 {
     int main_x = 1 + SIDEBAR_WIDTH + 1;
-    int main_w = tui_state.w - main_x - 1;
+    int main_w = tui_state.width - main_x - 1;
     if (main_w < 10) return;
 
-    int vis_rows = (tui_state.h - 2) - CONTENT_START;
+    int vis_rows = (tui_state.height - 2) - CONTENT_START;
     if (vis_rows <= 0) return;
 
     int max_scroll = (int)tui_state.proc_count - vis_rows;
@@ -183,7 +183,7 @@ static void draw_process_list(Screen *screen)
                       ? g_attr_sel : g_attr_normal;
         screen_text(screen, main_x, row, line, attr);
         int used = (int)wcslen(line);
-        for (int x = main_x + used; x < tui_state.w - 1; x++) {
+        for (int x = main_x + used; x < tui_state.width - 1; x++) {
             screen_put(screen, x, row, L' ', attr);
         }
     }
@@ -195,7 +195,7 @@ static void draw_main_panel(Screen *screen)
     int main_x = sb_end + 1;
     WORD attr = g_attr_border;
 
-    for (int y = CONTENT_START; y < tui_state.h - 2; y++) {
+    for (int y = CONTENT_START; y < tui_state.height - 2; y++) {
         screen_put(screen, sb_end, y, BOX_V, attr);
     }
 
@@ -212,7 +212,7 @@ static void draw_main_panel(Screen *screen)
 
 static void draw_command(Screen *screen)
 {
-    int cmd_row = tui_state.h - 2;
+    int cmd_row = tui_state.height - 2;
 
     wchar_t display[STATUS_MSG_MAX];
     if (tui_state.status_msg[0] && (GetTickCount64() - tui_state.status_ticks) < MAX_STATUS_TICKS) {
@@ -233,12 +233,12 @@ static void draw_command(Screen *screen)
 static void render(void)
 {
     Screen screen;
-    if (screen_alloc(&screen, tui_state.w, tui_state.h) != 0) return;
+    if (screen_alloc(&screen, tui_state.width, tui_state.height) != 0) return;
 
     screen_clear(&screen, g_attr_normal);
     draw_borders(&screen);
     draw_sep_row(&screen, SEP1_ROW, TRUE);
-    draw_sep_row(&screen, tui_state.h - 3, FALSE);
+    draw_sep_row(&screen, tui_state.height - 3, FALSE);
     draw_header(&screen);
     draw_sidebar(&screen);
     draw_main_panel(&screen);
@@ -457,7 +457,7 @@ static void handle_key(WORD vk, WCHAR ch)
                 if (tui_state.proc_sel < tui_state.proc_scroll) tui_state.proc_scroll = tui_state.proc_sel;
             } else if (vk == VK_DOWN && (unsigned int)tui_state.proc_sel + 1 < tui_state.proc_count) {
                 tui_state.proc_sel++;
-                int vis = (tui_state.h - 2) - CONTENT_START;
+                int vis = (tui_state.height - 2) - CONTENT_START;
                 if (tui_state.proc_sel >= tui_state.proc_scroll + vis) tui_state.proc_scroll = tui_state.proc_sel - vis + 1;
             } else if (vk == VK_RETURN) {
                 attach_to_selected();
@@ -516,10 +516,10 @@ int tui_init(void)
 
     CONSOLE_SCREEN_BUFFER_INFO csbi = {0};
     if (!GetConsoleScreenBufferInfo(tui_state.hOut, &csbi)) return -1;
-    tui_state.w = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-    tui_state.h = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-    if (tui_state.w < 80) tui_state.w = 80;
-    if (tui_state.h < 25) tui_state.h = 25;
+    tui_state.width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    tui_state.height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    if (tui_state.width < 80) tui_state.width = 80;
+    if (tui_state.height < 25) tui_state.height = 25;
 
     CONSOLE_CURSOR_INFO ci = {0};
     GetConsoleCursorInfo(tui_state.hOut, &ci);
@@ -581,7 +581,7 @@ void tui_shutdown(void)
 
     DWORD written;
     COORD zero = {0, 0};
-    FillConsoleOutputCharacterW(tui_state.hOut, L' ', (DWORD)(tui_state.w * tui_state.h), zero, &written);
+    FillConsoleOutputCharacterW(tui_state.hOut, L' ', (DWORD)(tui_state.width * tui_state.height), zero, &written);
     SetConsoleCursorPosition(tui_state.hOut, zero);
 }
 

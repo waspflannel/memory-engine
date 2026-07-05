@@ -11,11 +11,11 @@
  */
 typedef struct {
     CHAR_INFO *cells;
-    int        w;
-    int        h;
+    int        width;
+    int        height;
 } Screen;
 
-int  screen_alloc(Screen *screen, int w, int h);   /* 0 on success, -1 if out of memory */
+int  screen_alloc(Screen *screen, int width, int height);   /* 0 on success, -1 if out of memory */
 void screen_free(Screen *screen);
 
 void screen_clear(Screen *screen, WORD attr);
