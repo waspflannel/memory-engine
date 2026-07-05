@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <wchar.h>
 
+#include "tui/render.h"
 #include "core/process/process.h"
 #include "core/memory/memory.h"
 
@@ -14,6 +15,25 @@
 #define SEP1_ROW        2
 #define CONTENT_START   3
 #define MAX_STATUS_TICKS 3000
+
+/* Box-drawing glyphs — semantic roles, not Unicode code points */
+#define BOX_TL     L'\x250C'
+#define BOX_TR     L'\x2510'
+#define BOX_BL     L'\x2514'
+#define BOX_BR     L'\x2518'
+#define BOX_H      L'\x2500'
+#define BOX_V      L'\x2502'
+#define BOX_TLEFT  L'\x251C'
+#define BOX_TRIGHT L'\x2524'
+#define BOX_TTOP   L'\x252C'
+
+/* Command-prefix lengths, coupled to their literals in exec_command */
+#define CMD_ATTACH_PREFIX 7  /* length of L"attach " */
+#define CMD_READ_PREFIX   5  /* length of L"read "   */
+#define CMD_WRITE_PREFIX  6  /* length of L"write "  */
+
+#define CMD_BUF_MAX    256
+#define STATUS_MSG_MAX 512
 
 enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
 enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
@@ -55,91 +75,56 @@ static struct {
     Target  target;
     int     attached;
 
-    wchar_t cmd_buf[256];
+    wchar_t cmd_buf[CMD_BUF_MAX];
     int     cmd_len;
 
-    wchar_t status_msg[512];
-    int     status_error;
-    DWORD   status_ticks;
+    wchar_t   status_msg[STATUS_MSG_MAX];
+    int       status_error;
+    ULONGLONG status_ticks;
 
     int running;
 } g;
 
-static void set_cell(CHAR_INFO *buf, int x, int y, WCHAR ch, WORD attr)
-{
-    if (x < 0 || x >= g.w || y < 0 || y >= g.h) return;
-    buf[y * g.w + x].Char.UnicodeChar = ch;
-    buf[y * g.w + x].Attributes = attr;
-}
+/* ---- screen composition (what to draw; uses render.h for how) ---- */
 
-static void fill_row(CHAR_INFO *buf, int y, WCHAR ch, WORD attr, int x0, int x1)
-{
-    for (int x = x0; x <= x1; x++) {
-        set_cell(buf, x, y, ch, attr);
-    }
-}
-
-static void draw_text(CHAR_INFO *buf, int x, int y, const wchar_t *text, WORD attr)
-{
-    while (*text && x < g.w) {
-        set_cell(buf, x++, y, *text++, attr);
-    }
-}
-
-static void draw_text_right(CHAR_INFO *buf, int right_x, int y, const wchar_t *text, WORD attr)
-{
-    size_t len = wcslen(text);
-    int x = right_x - (int)len + 1;
-    if (x < 0) x = 0;
-    draw_text(buf, x, y, text, attr);
-}
-
-static void clear_area(CHAR_INFO *buf)
-{
-    for (int i = 0; i < g.w * g.h; i++) {
-        buf[i].Char.UnicodeChar = L' ';
-        buf[i].Attributes = g_attr_normal;
-    }
-}
-
-static void draw_borders(CHAR_INFO *buf)
+static void draw_borders(Screen *s)
 {
     WORD a = g_attr_border;
 
-    set_cell(buf, 0,           0,             L'\x250C', a);
-    set_cell(buf, g.w - 1,     0,             L'\x2510', a);
-    set_cell(buf, 0,           g.h - 1,       L'\x2514', a);
-    set_cell(buf, g.w - 1,     g.h - 1,       L'\x2518', a);
+    screen_put(s, 0,           0,             BOX_TL, a);
+    screen_put(s, g.w - 1,     0,             BOX_TR, a);
+    screen_put(s, 0,           g.h - 1,       BOX_BL, a);
+    screen_put(s, g.w - 1,     g.h - 1,       BOX_BR, a);
 
-    fill_row(buf, 0,           L'\x2500', a, 1, g.w - 2);
-    fill_row(buf, g.h - 1,     L'\x2500', a, 1, g.w - 2);
+    screen_fill_row(s, 0,       BOX_H, a, 1, g.w - 2);
+    screen_fill_row(s, g.h - 1, BOX_H, a, 1, g.w - 2);
 
     for (int y = 1; y < g.h - 1; y++) {
-        set_cell(buf, 0,       y, L'\x2502', a);
-        set_cell(buf, g.w - 1, y, L'\x2502', a);
+        screen_put(s, 0,       y, BOX_V, a);
+        screen_put(s, g.w - 1, y, BOX_V, a);
     }
 }
 
-static void draw_sep_row(CHAR_INFO *buf, int y, int split)
+static void draw_sep_row(Screen *s, int y, int split)
 {
     WORD a = g_attr_border;
     int sb_end = 1 + SIDEBAR_WIDTH;
 
-    set_cell(buf, 0,       y, L'\x251C', a);
-    set_cell(buf, g.w - 1, y, L'\x2524', a);
+    screen_put(s, 0,       y, BOX_TLEFT,  a);
+    screen_put(s, g.w - 1, y, BOX_TRIGHT, a);
 
     if (split) {
-        fill_row(buf, y, L'\x2500', a, 1, sb_end - 1);
-        set_cell(buf, sb_end, y, L'\x252C', a);
-        fill_row(buf, y, L'\x2500', a, sb_end + 1, g.w - 2);
+        screen_fill_row(s, y, BOX_H, a, 1, sb_end - 1);
+        screen_put(s, sb_end, y, BOX_TTOP, a);
+        screen_fill_row(s, y, BOX_H, a, sb_end + 1, g.w - 2);
     } else {
-        fill_row(buf, y, L'\x2500', a, 1, g.w - 2);
+        screen_fill_row(s, y, BOX_H, a, 1, g.w - 2);
     }
 }
 
-static void draw_header(CHAR_INFO *buf)
+static void draw_header(Screen *s)
 {
-    draw_text(buf, 2, HEADER_ROW, L"MemForge v0.1", g_attr_header);
+    screen_text(s, 2, HEADER_ROW, L"MemForge v0.1", g_attr_header);
 
     wchar_t status[128];
     if (g.attached) {
@@ -147,13 +132,13 @@ static void draw_header(CHAR_INFO *buf)
     } else {
         swprintf_s(status, 128, L"[No process attached]");
     }
-    draw_text_right(buf, g.w - 2, HEADER_ROW, status, g_attr_header);
+    screen_text_right(s, g.w - 2, HEADER_ROW, status, g_attr_header);
 
-    set_cell(buf, 0,             HEADER_ROW, L'\x2502', g_attr_border);
-    set_cell(buf, g.w - 1,       HEADER_ROW, L'\x2502', g_attr_border);
+    screen_put(s, 0,       HEADER_ROW, BOX_V, g_attr_border);
+    screen_put(s, g.w - 1, HEADER_ROW, BOX_V, g_attr_border);
 }
 
-static void draw_sidebar(CHAR_INFO *buf)
+static void draw_sidebar(Screen *s)
 {
     int sb_end = 1 + SIDEBAR_WIDTH;
 
@@ -165,13 +150,13 @@ static void draw_sidebar(CHAR_INFO *buf)
                       ? g_attr_sel : g_attr_normal;
 
         for (int x = 1; x < sb_end; x++) {
-            set_cell(buf, x, row, L' ', attr);
+            screen_put(s, x, row, L' ', attr);
         }
-        draw_text(buf, 2, row, g_sidebar_labels[i], attr);
+        screen_text(s, 2, row, g_sidebar_labels[i], attr);
     }
 }
 
-static void draw_process_list(CHAR_INFO *buf)
+static void draw_process_list(Screen *s)
 {
     int main_x = 1 + SIDEBAR_WIDTH + 1;
     int main_w = g.w - main_x - 1;
@@ -195,84 +180,80 @@ static void draw_process_list(CHAR_INFO *buf)
         swprintf_s(line, 256, L"%5u  %s", pe->pid, pe->name);
         WORD attr = (pi == g.proc_sel && g.focus == FOCUS_MAIN)
                       ? g_attr_sel : g_attr_normal;
-        draw_text(buf, main_x, row, line, attr);
+        screen_text(s, main_x, row, line, attr);
         int used = (int)wcslen(line);
         for (int x = main_x + used; x < g.w - 1; x++) {
-            set_cell(buf, x, row, L' ', attr);
+            screen_put(s, x, row, L' ', attr);
         }
     }
 }
 
-static void draw_main_panel(CHAR_INFO *buf)
+static void draw_main_panel(Screen *s)
 {
     int sb_end = 1 + SIDEBAR_WIDTH;
     int main_x = sb_end + 1;
     WORD a = g_attr_border;
 
     for (int y = CONTENT_START; y < g.h - 2; y++) {
-        set_cell(buf, sb_end, y, L'\x2502', a);
+        screen_put(s, sb_end, y, BOX_V, a);
     }
 
     if (g.panel == PANEL_PROCESSES) {
         if (g.proc_count > 0) {
-            draw_process_list(buf);
+            draw_process_list(s);
         } else {
-            draw_text(buf, main_x, CONTENT_START, L"Loading process list...", g_attr_normal);
+            screen_text(s, main_x, CONTENT_START, L"Loading process list...", g_attr_normal);
         }
     } else {
-        const wchar_t *msg = L"Not yet implemented";
-        draw_text(buf, main_x, CONTENT_START, msg, g_attr_normal);
+        screen_text(s, main_x, CONTENT_START, L"Not yet implemented", g_attr_normal);
     }
 }
 
-static void draw_command(CHAR_INFO *buf)
+static void draw_command(Screen *s)
 {
     int cmd_row = g.h - 2;
 
-    wchar_t display[512];
-    if (g.status_msg[0] && (GetTickCount() - g.status_ticks) < MAX_STATUS_TICKS) {
-        swprintf_s(display, 512, L" %s", g.status_msg);
+    wchar_t display[STATUS_MSG_MAX];
+    if (g.status_msg[0] && (GetTickCount64() - g.status_ticks) < MAX_STATUS_TICKS) {
+        swprintf_s(display, STATUS_MSG_MAX, L" %s", g.status_msg);
         WORD attr = g.status_error ? g_attr_error : g_attr_normal;
-        draw_text(buf, 1, cmd_row, display, attr);
+        screen_text(s, 1, cmd_row, display, attr);
     } else {
-        swprintf_s(display, 512, L" > %s", g.cmd_buf);
+        swprintf_s(display, STATUS_MSG_MAX, L" > %s", g.cmd_buf);
         WORD attr = (g.focus == FOCUS_COMMAND) ? g_attr_sel : g_attr_normal;
-        draw_text(buf, 1, cmd_row, display, attr);
+        screen_text(s, 1, cmd_row, display, attr);
         if (g.focus == FOCUS_COMMAND) {
             int cursor_x = 4 + g.cmd_len;
-            set_cell(buf, cursor_x, cmd_row, L' ', g_attr_sel | COMMON_LVB_UNDERSCORE);
+            screen_put(s, cursor_x, cmd_row, L' ', g_attr_sel | COMMON_LVB_UNDERSCORE);
         }
     }
 }
 
 static void render(void)
 {
-    CHAR_INFO *buf = (CHAR_INFO *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-        g.w * g.h * sizeof(CHAR_INFO));
-    if (!buf) return;
+    Screen s;
+    if (screen_alloc(&s, g.w, g.h) != 0) return;
 
-    clear_area(buf);
-    draw_borders(buf);
-    draw_sep_row(buf, SEP1_ROW, TRUE);
-    draw_sep_row(buf, g.h - 3, FALSE);
-    draw_header(buf);
-    draw_sidebar(buf);
-    draw_main_panel(buf);
-    draw_command(buf);
+    screen_clear(&s, g_attr_normal);
+    draw_borders(&s);
+    draw_sep_row(&s, SEP1_ROW, TRUE);
+    draw_sep_row(&s, g.h - 3, FALSE);
+    draw_header(&s);
+    draw_sidebar(&s);
+    draw_main_panel(&s);
+    draw_command(&s);
 
-    SMALL_RECT region = { 0, 0, (SHORT)(g.w - 1), (SHORT)(g.h - 1) };
-    COORD bufSize = { (SHORT)g.w, (SHORT)g.h };
-    COORD bufCoord = { 0, 0 };
-    WriteConsoleOutputW(g.hOut, buf, bufSize, bufCoord, &region);
-
-    HeapFree(GetProcessHeap(), 0, buf);
+    screen_present(&s, g.hOut);
+    screen_free(&s);
 }
+
+/* ---- app state + actions ---- */
 
 static void set_status(const wchar_t *msg, int is_error)
 {
-    wcsncpy_s(g.status_msg, 512, msg, _TRUNCATE);
+    wcsncpy_s(g.status_msg, STATUS_MSG_MAX, msg, _TRUNCATE);
     g.status_error = is_error;
-    g.status_ticks = GetTickCount();
+    g.status_ticks = GetTickCount64();
 }
 
 static void refresh_process_list(void)
@@ -411,8 +392,8 @@ static void exec_command(void)
         return;
     }
 
-    if (wcsncmp(g.cmd_buf, L"attach ", 7) == 0) {
-        DWORD pid = (DWORD)_wtol(g.cmd_buf + 7);
+    if (wcsncmp(g.cmd_buf, L"attach ", CMD_ATTACH_PREFIX) == 0) {
+        DWORD pid = (DWORD)_wtol(g.cmd_buf + CMD_ATTACH_PREFIX);
         if (pid == 0) {
             set_status(L"Invalid PID", TRUE);
         } else {
@@ -434,14 +415,14 @@ static void exec_command(void)
         return;
     }
 
-    if (wcsncmp(g.cmd_buf, L"read ", 5) == 0) {
-        cmd_read(g.cmd_buf + 5);
+    if (wcsncmp(g.cmd_buf, L"read ", CMD_READ_PREFIX) == 0) {
+        cmd_read(g.cmd_buf + CMD_READ_PREFIX);
         g.cmd_len = 0;
         return;
     }
 
-    if (wcsncmp(g.cmd_buf, L"write ", 6) == 0) {
-        cmd_write(g.cmd_buf + 6);
+    if (wcsncmp(g.cmd_buf, L"write ", CMD_WRITE_PREFIX) == 0) {
+        cmd_write(g.cmd_buf + CMD_WRITE_PREFIX);
         g.cmd_len = 0;
         return;
     }
@@ -497,7 +478,7 @@ static void handle_key(WORD vk, WCHAR ch)
         } else if (vk == VK_ESCAPE) {
             g.cmd_len = 0;
             g.focus = FOCUS_SIDEBAR;
-        } else if (ch >= L' ' && g.cmd_len < 255) {
+        } else if (ch >= L' ' && g.cmd_len < CMD_BUF_MAX - 1) {
             g.cmd_buf[g.cmd_len++] = ch;
             g.cmd_buf[g.cmd_len] = L'\0';
         }
