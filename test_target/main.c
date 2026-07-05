@@ -4,11 +4,11 @@
 #include <windows.h>
 #include <stdio.h>
 
-static volatile int     g_health  = 100;
-static volatile float   g_speed   = 1.5f;
-static volatile double  g_gravity = 9.81;
-static volatile wchar_t g_name[]  = L"TestTarget";
-static volatile int     g_ammo    = 30;
+static volatile int     target_health  = 100;
+static volatile float   target_speed   = 1.5f;
+static volatile double  target_gravity = 9.81;
+static volatile wchar_t target_name[]  = L"TestTarget";
+static volatile int     target_ammo    = 30;
 
 int main(void)
 {
@@ -18,11 +18,11 @@ int main(void)
     wprintf(L"PID: %u\n", pid);
     wprintf(L"\n");
     wprintf(L"Known values (use these addresses to verify reads/writes):\n");
-    wprintf(L"  g_health  (i32)  @ 0x%p  = %d\n", (void *)&g_health, g_health);
-    wprintf(L"  g_speed   (f32)  @ 0x%p  = %.1f\n", (void *)&g_speed, g_speed);
-    wprintf(L"  g_gravity (f64)  @ 0x%p  = %.2f\n", (void *)&g_gravity, g_gravity);
-    wprintf(L"  g_ammo    (i32)  @ 0x%p  = %d\n", (void *)&g_ammo, g_ammo);
-    wprintf(L"  g_name    (str)  @ 0x%p  = %s\n", (void *)&g_name, g_name);
+    wprintf(L"  target_health  (i32)  @ 0x%p  = %d\n", (void *)&target_health, target_health);
+    wprintf(L"  target_speed   (f32)  @ 0x%p  = %.1f\n", (void *)&target_speed, target_speed);
+    wprintf(L"  target_gravity (f64)  @ 0x%p  = %.2f\n", (void *)&target_gravity, target_gravity);
+    wprintf(L"  target_ammo    (i32)  @ 0x%p  = %d\n", (void *)&target_ammo, target_ammo);
+    wprintf(L"  target_name    (str)  @ 0x%p  = %s\n", (void *)&target_name, target_name);
     wprintf(L"\n");
     wprintf(L"Commands (press key, then Enter):\n");
     wprintf(L"  h = toggle health (100 <-> 50)\n");
@@ -44,31 +44,31 @@ int main(void)
         switch (c) {
         case L'h':
         case L'H':
-            g_health = (g_health == 100) ? 50 : 100;
-            wprintf(L"  g_health = %d\n", g_health);
+            target_health = (target_health == 100) ? 50 : 100;
+            wprintf(L"  target_health = %d\n", target_health);
             break;
         case L'a':
         case L'A':
-            g_ammo--;
-            wprintf(L"  g_ammo = %d\n", g_ammo);
+            target_ammo--;
+            wprintf(L"  target_ammo = %d\n", target_ammo);
             break;
         case L's':
         case L'S':
-            g_speed += 0.5f;
-            wprintf(L"  g_speed = %.1f\n", g_speed);
+            target_speed += 0.5f;
+            wprintf(L"  target_speed = %.1f\n", target_speed);
             break;
         case L'g':
         case L'G':
-            g_gravity *= 2.0;
-            wprintf(L"  g_gravity = %.2f\n", g_gravity);
+            target_gravity *= 2.0;
+            wprintf(L"  target_gravity = %.2f\n", target_gravity);
             break;
         case L'v':
         case L'V':
-            wprintf(L"  g_health  = %d\n", g_health);
-            wprintf(L"  g_speed   = %.1f\n", g_speed);
-            wprintf(L"  g_gravity = %.2f\n", g_gravity);
-            wprintf(L"  g_ammo    = %d\n", g_ammo);
-            wprintf(L"  g_name    = %s\n", g_name);
+            wprintf(L"  target_health  = %d\n", target_health);
+            wprintf(L"  target_speed   = %.1f\n", target_speed);
+            wprintf(L"  target_gravity = %.2f\n", target_gravity);
+            wprintf(L"  target_ammo    = %d\n", target_ammo);
+            wprintf(L"  target_name    = %s\n", target_name);
             break;
         case L'q':
         case L'Q':

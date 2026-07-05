@@ -34,6 +34,7 @@
 
 #define CMD_BUF_MAX    256
 #define STATUS_MSG_MAX 512
+#define INPUT_RECORD_BATCH 16
 
 enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
 enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
@@ -83,190 +84,190 @@ static struct {
     ULONGLONG status_ticks;
 
     int running;
-} g;
+} tui_state;
 
 /* ---- screen composition (what to draw; uses render.h for how) ---- */
 
-static void draw_borders(Screen *s)
+static void draw_borders(Screen *screen)
 {
-    WORD a = g_attr_border;
+    WORD attr = g_attr_border;
 
-    screen_put(s, 0,           0,             BOX_TL, a);
-    screen_put(s, g.w - 1,     0,             BOX_TR, a);
-    screen_put(s, 0,           g.h - 1,       BOX_BL, a);
-    screen_put(s, g.w - 1,     g.h - 1,       BOX_BR, a);
+    screen_put(screen, 0,           0,             BOX_TL, attr);
+    screen_put(screen, tui_state.w - 1,     0,             BOX_TR, attr);
+    screen_put(screen, 0,           tui_state.h - 1,       BOX_BL, attr);
+    screen_put(screen, tui_state.w - 1,     tui_state.h - 1,       BOX_BR, attr);
 
-    screen_fill_row(s, 0,       BOX_H, a, 1, g.w - 2);
-    screen_fill_row(s, g.h - 1, BOX_H, a, 1, g.w - 2);
+    screen_fill_row(screen, 0,       BOX_H, attr, 1, tui_state.w - 2);
+    screen_fill_row(screen, tui_state.h - 1, BOX_H, attr, 1, tui_state.w - 2);
 
-    for (int y = 1; y < g.h - 1; y++) {
-        screen_put(s, 0,       y, BOX_V, a);
-        screen_put(s, g.w - 1, y, BOX_V, a);
+    for (int y = 1; y < tui_state.h - 1; y++) {
+        screen_put(screen, 0,       y, BOX_V, attr);
+        screen_put(screen, tui_state.w - 1, y, BOX_V, attr);
     }
 }
 
-static void draw_sep_row(Screen *s, int y, int split)
+static void draw_sep_row(Screen *screen, int y, int split)
 {
-    WORD a = g_attr_border;
+    WORD attr = g_attr_border;
     int sb_end = 1 + SIDEBAR_WIDTH;
 
-    screen_put(s, 0,       y, BOX_TLEFT,  a);
-    screen_put(s, g.w - 1, y, BOX_TRIGHT, a);
+    screen_put(screen, 0,       y, BOX_TLEFT,  attr);
+    screen_put(screen, tui_state.w - 1, y, BOX_TRIGHT, attr);
 
     if (split) {
-        screen_fill_row(s, y, BOX_H, a, 1, sb_end - 1);
-        screen_put(s, sb_end, y, BOX_TTOP, a);
-        screen_fill_row(s, y, BOX_H, a, sb_end + 1, g.w - 2);
+        screen_fill_row(screen, y, BOX_H, attr, 1, sb_end - 1);
+        screen_put(screen, sb_end, y, BOX_TTOP, attr);
+        screen_fill_row(screen, y, BOX_H, attr, sb_end + 1, tui_state.w - 2);
     } else {
-        screen_fill_row(s, y, BOX_H, a, 1, g.w - 2);
+        screen_fill_row(screen, y, BOX_H, attr, 1, tui_state.w - 2);
     }
 }
 
-static void draw_header(Screen *s)
+static void draw_header(Screen *screen)
 {
-    screen_text(s, 2, HEADER_ROW, L"MemForge v0.1", g_attr_header);
+    screen_text(screen, 2, HEADER_ROW, L"MemForge v0.1", g_attr_header);
 
     wchar_t status[128];
-    if (g.attached) {
-        swprintf_s(status, 128, L"[Process: %s PID:%u]", g.target.name, g.target.pid);
+    if (tui_state.attached) {
+        swprintf_s(status, 128, L"[Process: %s PID:%u]", tui_state.target.name, tui_state.target.pid);
     } else {
         swprintf_s(status, 128, L"[No process attached]");
     }
-    screen_text_right(s, g.w - 2, HEADER_ROW, status, g_attr_header);
+    screen_text_right(screen, tui_state.w - 2, HEADER_ROW, status, g_attr_header);
 
-    screen_put(s, 0,       HEADER_ROW, BOX_V, g_attr_border);
-    screen_put(s, g.w - 1, HEADER_ROW, BOX_V, g_attr_border);
+    screen_put(screen, 0,       HEADER_ROW, BOX_V, g_attr_border);
+    screen_put(screen, tui_state.w - 1, HEADER_ROW, BOX_V, g_attr_border);
 }
 
-static void draw_sidebar(Screen *s)
+static void draw_sidebar(Screen *screen)
 {
     int sb_end = 1 + SIDEBAR_WIDTH;
 
     for (int i = 0; i < PANEL_COUNT; i++) {
         int row = CONTENT_START + i;
-        if (row >= g.h - 2) break;
+        if (row >= tui_state.h - 2) break;
 
-        WORD attr = (i == g.sidebar_idx && g.focus == FOCUS_SIDEBAR)
+        WORD attr = (i == tui_state.sidebar_idx && tui_state.focus == FOCUS_SIDEBAR)
                       ? g_attr_sel : g_attr_normal;
 
         for (int x = 1; x < sb_end; x++) {
-            screen_put(s, x, row, L' ', attr);
+            screen_put(screen, x, row, L' ', attr);
         }
-        screen_text(s, 2, row, g_sidebar_labels[i], attr);
+        screen_text(screen, 2, row, g_sidebar_labels[i], attr);
     }
 }
 
-static void draw_process_list(Screen *s)
+static void draw_process_list(Screen *screen)
 {
     int main_x = 1 + SIDEBAR_WIDTH + 1;
-    int main_w = g.w - main_x - 1;
+    int main_w = tui_state.w - main_x - 1;
     if (main_w < 10) return;
 
-    int vis_rows = (g.h - 2) - CONTENT_START;
+    int vis_rows = (tui_state.h - 2) - CONTENT_START;
     if (vis_rows <= 0) return;
 
-    int max_scroll = (int)g.proc_count - vis_rows;
+    int max_scroll = (int)tui_state.proc_count - vis_rows;
     if (max_scroll < 0) max_scroll = 0;
-    if (g.proc_scroll > max_scroll) g.proc_scroll = max_scroll;
-    if (g.proc_scroll < 0) g.proc_scroll = 0;
+    if (tui_state.proc_scroll > max_scroll) tui_state.proc_scroll = max_scroll;
+    if (tui_state.proc_scroll < 0) tui_state.proc_scroll = 0;
 
     wchar_t line[256];
     for (int i = 0; i < vis_rows; i++) {
-        int pi = g.proc_scroll + i;
+        int pi = tui_state.proc_scroll + i;
         int row = CONTENT_START + i;
-        if ((unsigned int)pi >= g.proc_count) break;
+        if ((unsigned int)pi >= tui_state.proc_count) break;
 
-        ProcessEntry *pe = &g.procs[pi];
-        swprintf_s(line, 256, L"%5u  %s", pe->pid, pe->name);
-        WORD attr = (pi == g.proc_sel && g.focus == FOCUS_MAIN)
+        ProcessEntry *entry = &tui_state.procs[pi];
+        swprintf_s(line, 256, L"%5u  %s", entry->pid, entry->name);
+        WORD attr = (pi == tui_state.proc_sel && tui_state.focus == FOCUS_MAIN)
                       ? g_attr_sel : g_attr_normal;
-        screen_text(s, main_x, row, line, attr);
+        screen_text(screen, main_x, row, line, attr);
         int used = (int)wcslen(line);
-        for (int x = main_x + used; x < g.w - 1; x++) {
-            screen_put(s, x, row, L' ', attr);
+        for (int x = main_x + used; x < tui_state.w - 1; x++) {
+            screen_put(screen, x, row, L' ', attr);
         }
     }
 }
 
-static void draw_main_panel(Screen *s)
+static void draw_main_panel(Screen *screen)
 {
     int sb_end = 1 + SIDEBAR_WIDTH;
     int main_x = sb_end + 1;
-    WORD a = g_attr_border;
+    WORD attr = g_attr_border;
 
-    for (int y = CONTENT_START; y < g.h - 2; y++) {
-        screen_put(s, sb_end, y, BOX_V, a);
+    for (int y = CONTENT_START; y < tui_state.h - 2; y++) {
+        screen_put(screen, sb_end, y, BOX_V, attr);
     }
 
-    if (g.panel == PANEL_PROCESSES) {
-        if (g.proc_count > 0) {
-            draw_process_list(s);
+    if (tui_state.panel == PANEL_PROCESSES) {
+        if (tui_state.proc_count > 0) {
+            draw_process_list(screen);
         } else {
-            screen_text(s, main_x, CONTENT_START, L"Loading process list...", g_attr_normal);
+            screen_text(screen, main_x, CONTENT_START, L"Loading process list...", g_attr_normal);
         }
     } else {
-        screen_text(s, main_x, CONTENT_START, L"Not yet implemented", g_attr_normal);
+        screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", g_attr_normal);
     }
 }
 
-static void draw_command(Screen *s)
+static void draw_command(Screen *screen)
 {
-    int cmd_row = g.h - 2;
+    int cmd_row = tui_state.h - 2;
 
     wchar_t display[STATUS_MSG_MAX];
-    if (g.status_msg[0] && (GetTickCount64() - g.status_ticks) < MAX_STATUS_TICKS) {
-        swprintf_s(display, STATUS_MSG_MAX, L" %s", g.status_msg);
-        WORD attr = g.status_error ? g_attr_error : g_attr_normal;
-        screen_text(s, 1, cmd_row, display, attr);
+    if (tui_state.status_msg[0] && (GetTickCount64() - tui_state.status_ticks) < MAX_STATUS_TICKS) {
+        swprintf_s(display, STATUS_MSG_MAX, L" %s", tui_state.status_msg);
+        WORD attr = tui_state.status_error ? g_attr_error : g_attr_normal;
+        screen_text(screen, 1, cmd_row, display, attr);
     } else {
-        swprintf_s(display, STATUS_MSG_MAX, L" > %s", g.cmd_buf);
-        WORD attr = (g.focus == FOCUS_COMMAND) ? g_attr_sel : g_attr_normal;
-        screen_text(s, 1, cmd_row, display, attr);
-        if (g.focus == FOCUS_COMMAND) {
-            int cursor_x = 4 + g.cmd_len;
-            screen_put(s, cursor_x, cmd_row, L' ', g_attr_sel | COMMON_LVB_UNDERSCORE);
+        swprintf_s(display, STATUS_MSG_MAX, L" > %s", tui_state.cmd_buf);
+        WORD attr = (tui_state.focus == FOCUS_COMMAND) ? g_attr_sel : g_attr_normal;
+        screen_text(screen, 1, cmd_row, display, attr);
+        if (tui_state.focus == FOCUS_COMMAND) {
+            int cursor_x = 4 + tui_state.cmd_len;
+            screen_put(screen, cursor_x, cmd_row, L' ', g_attr_sel | COMMON_LVB_UNDERSCORE);
         }
     }
 }
 
 static void render(void)
 {
-    Screen s;
-    if (screen_alloc(&s, g.w, g.h) != 0) return;
+    Screen screen;
+    if (screen_alloc(&screen, tui_state.w, tui_state.h) != 0) return;
 
-    screen_clear(&s, g_attr_normal);
-    draw_borders(&s);
-    draw_sep_row(&s, SEP1_ROW, TRUE);
-    draw_sep_row(&s, g.h - 3, FALSE);
-    draw_header(&s);
-    draw_sidebar(&s);
-    draw_main_panel(&s);
-    draw_command(&s);
+    screen_clear(&screen, g_attr_normal);
+    draw_borders(&screen);
+    draw_sep_row(&screen, SEP1_ROW, TRUE);
+    draw_sep_row(&screen, tui_state.h - 3, FALSE);
+    draw_header(&screen);
+    draw_sidebar(&screen);
+    draw_main_panel(&screen);
+    draw_command(&screen);
 
-    screen_present(&s, g.hOut);
-    screen_free(&s);
+    screen_present(&screen, tui_state.hOut);
+    screen_free(&screen);
 }
 
 /* ---- app state + actions ---- */
 
 static void set_status(const wchar_t *msg, int is_error)
 {
-    wcsncpy_s(g.status_msg, STATUS_MSG_MAX, msg, _TRUNCATE);
-    g.status_error = is_error;
-    g.status_ticks = GetTickCount64();
+    wcsncpy_s(tui_state.status_msg, STATUS_MSG_MAX, msg, _TRUNCATE);
+    tui_state.status_error = is_error;
+    tui_state.status_ticks = GetTickCount64();
 }
 
 static void refresh_process_list(void)
 {
-    if (g.procs) {
-        process_free_list(g.procs);
-        g.procs = NULL;
+    if (tui_state.procs) {
+        process_free_list(tui_state.procs);
+        tui_state.procs = NULL;
     }
-    g.proc_count = 0;
-    g.proc_sel   = 0;
-    g.proc_scroll = 0;
+    tui_state.proc_count = 0;
+    tui_state.proc_sel   = 0;
+    tui_state.proc_scroll = 0;
 
-    PlatformError err = process_list(&g.procs, &g.proc_count);
+    PlatformError err = process_list(&tui_state.procs, &tui_state.proc_count);
     if (err != PLATFORM_OK) {
         set_status(L"Failed to list processes", TRUE);
     }
@@ -274,14 +275,14 @@ static void refresh_process_list(void)
 
 static int do_attach(DWORD pid)
 {
-    if (g.attached) {
-        process_detach(&g.target);
-        g.attached = FALSE;
+    if (tui_state.attached) {
+        process_detach(&tui_state.target);
+        tui_state.attached = FALSE;
     }
 
     process_enable_privilege();
 
-    PlatformError err = process_attach(pid, &g.target);
+    PlatformError err = process_attach(pid, &tui_state.target);
     if (err != PLATFORM_OK) {
         wchar_t msg[512];
         swprintf_s(msg, 512, L"Failed to attach to PID %u: %S", pid, process_error_string(err));
@@ -289,24 +290,24 @@ static int do_attach(DWORD pid)
         return 0;
     }
 
-    g.attached = TRUE;
+    tui_state.attached = TRUE;
     wchar_t msg[256];
-    swprintf_s(msg, 256, L"Attached to %s (PID %u)", g.target.name, pid);
+    swprintf_s(msg, 256, L"Attached to %s (PID %u)", tui_state.target.name, pid);
     set_status(msg, FALSE);
     return 1;
 }
 
 static void attach_to_selected(void)
 {
-    if (!g.procs || g.proc_count == 0) return;
-    if ((unsigned int)g.proc_sel >= g.proc_count) return;
+    if (!tui_state.procs || tui_state.proc_count == 0) return;
+    if ((unsigned int)tui_state.proc_sel >= tui_state.proc_count) return;
 
-    do_attach(g.procs[g.proc_sel].pid);
+    do_attach(tui_state.procs[tui_state.proc_sel].pid);
 }
 
 static void cmd_read(const wchar_t *args)
 {
-    if (!g.attached) {
+    if (!tui_state.attached) {
         set_status(L"No process attached", TRUE);
         return;
     }
@@ -319,7 +320,7 @@ static void cmd_read(const wchar_t *args)
     }
 
     unsigned char buf[512];
-    PlatformError err = memory_read(&g.target, address, buf, (size_t)size);
+    PlatformError err = memory_read(&tui_state.target, address, buf, (size_t)size);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
         swprintf_s(msg, 256, L"read failed: %S", process_error_string(err));
@@ -337,7 +338,7 @@ static void cmd_read(const wchar_t *args)
 
 static void cmd_write(const wchar_t *args)
 {
-    if (!g.attached) {
+    if (!tui_state.attached) {
         set_status(L"No process attached", TRUE);
         return;
     }
@@ -369,7 +370,7 @@ static void cmd_write(const wchar_t *args)
         swscanf_s(hex + (i * 2), L"%2hhx", &buf[i]);
     }
 
-    PlatformError err = memory_write(&g.target, address, buf, (size_t)byte_count);
+    PlatformError err = memory_write(&tui_state.target, address, buf, (size_t)byte_count);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
         swprintf_s(msg, 256, L"write failed: %S", process_error_string(err));
@@ -384,80 +385,80 @@ static void cmd_write(const wchar_t *args)
 
 static void exec_command(void)
 {
-    if (g.cmd_len == 0) return;
+    if (tui_state.cmd_len == 0) return;
 
-    if (wcscmp(g.cmd_buf, L"quit") == 0 || wcscmp(g.cmd_buf, L"exit") == 0) {
-        g.running = FALSE;
-        g.cmd_len = 0;
+    if (wcscmp(tui_state.cmd_buf, L"quit") == 0 || wcscmp(tui_state.cmd_buf, L"exit") == 0) {
+        tui_state.running = FALSE;
+        tui_state.cmd_len = 0;
         return;
     }
 
-    if (wcsncmp(g.cmd_buf, L"attach ", CMD_ATTACH_PREFIX) == 0) {
-        DWORD pid = (DWORD)_wtol(g.cmd_buf + CMD_ATTACH_PREFIX);
+    if (wcsncmp(tui_state.cmd_buf, L"attach ", CMD_ATTACH_PREFIX) == 0) {
+        DWORD pid = (DWORD)_wtol(tui_state.cmd_buf + CMD_ATTACH_PREFIX);
         if (pid == 0) {
             set_status(L"Invalid PID", TRUE);
         } else {
             do_attach(pid);
         }
-        g.cmd_len = 0;
+        tui_state.cmd_len = 0;
         return;
     }
 
-    if (wcscmp(g.cmd_buf, L"detach") == 0) {
-        if (g.attached) {
-            process_detach(&g.target);
-            g.attached = FALSE;
+    if (wcscmp(tui_state.cmd_buf, L"detach") == 0) {
+        if (tui_state.attached) {
+            process_detach(&tui_state.target);
+            tui_state.attached = FALSE;
             set_status(L"Detached", FALSE);
         } else {
             set_status(L"No process attached", TRUE);
         }
-        g.cmd_len = 0;
+        tui_state.cmd_len = 0;
         return;
     }
 
-    if (wcsncmp(g.cmd_buf, L"read ", CMD_READ_PREFIX) == 0) {
-        cmd_read(g.cmd_buf + CMD_READ_PREFIX);
-        g.cmd_len = 0;
+    if (wcsncmp(tui_state.cmd_buf, L"read ", CMD_READ_PREFIX) == 0) {
+        cmd_read(tui_state.cmd_buf + CMD_READ_PREFIX);
+        tui_state.cmd_len = 0;
         return;
     }
 
-    if (wcsncmp(g.cmd_buf, L"write ", CMD_WRITE_PREFIX) == 0) {
-        cmd_write(g.cmd_buf + CMD_WRITE_PREFIX);
-        g.cmd_len = 0;
+    if (wcsncmp(tui_state.cmd_buf, L"write ", CMD_WRITE_PREFIX) == 0) {
+        cmd_write(tui_state.cmd_buf + CMD_WRITE_PREFIX);
+        tui_state.cmd_len = 0;
         return;
     }
 
     wchar_t msg[256];
-    swprintf_s(msg, 256, L"Unknown command: %s", g.cmd_buf);
+    swprintf_s(msg, 256, L"Unknown command: %s", tui_state.cmd_buf);
     set_status(msg, TRUE);
-    g.cmd_len = 0;
+    tui_state.cmd_len = 0;
 }
 
 static void handle_key(WORD vk, WCHAR ch)
 {
-    switch (g.focus) {
+    switch (tui_state.focus) {
     case FOCUS_SIDEBAR:
-        if (vk == VK_UP && g.sidebar_idx > 0) {
-            g.sidebar_idx--;
-        } else if (vk == VK_DOWN && g.sidebar_idx < PANEL_COUNT - 1) {
-            g.sidebar_idx++;
+        if (vk == VK_UP && tui_state.sidebar_idx > 0) {
+            tui_state.sidebar_idx--;
+        } else if (vk == VK_DOWN && tui_state.sidebar_idx < PANEL_COUNT - 1) {
+            tui_state.sidebar_idx++;
         } else if (vk == VK_RETURN) {
-            g.panel = g.sidebar_idx;
-            g.focus = FOCUS_MAIN;
+            tui_state.panel = tui_state.sidebar_idx;
+            tui_state.focus = FOCUS_MAIN;
         } else if (ch == L'q' || ch == L'Q') {
-            g.running = FALSE;
+            tui_state.running = FALSE;
         }
         break;
 
     case FOCUS_MAIN:
-        if (g.panel == PANEL_PROCESSES) {
-            if (vk == VK_UP && g.proc_sel > 0) {
-                g.proc_sel--;
-                if (g.proc_sel < g.proc_scroll) g.proc_scroll = g.proc_sel;
-            } else if (vk == VK_DOWN && (unsigned int)g.proc_sel + 1 < g.proc_count) {
-                g.proc_sel++;
-                int vis = (g.h - 2) - CONTENT_START;
-                if (g.proc_sel >= g.proc_scroll + vis) g.proc_scroll = g.proc_sel - vis + 1;
+        if (tui_state.panel == PANEL_PROCESSES) {
+            if (vk == VK_UP && tui_state.proc_sel > 0) {
+                tui_state.proc_sel--;
+                if (tui_state.proc_sel < tui_state.proc_scroll) tui_state.proc_scroll = tui_state.proc_sel;
+            } else if (vk == VK_DOWN && (unsigned int)tui_state.proc_sel + 1 < tui_state.proc_count) {
+                tui_state.proc_sel++;
+                int vis = (tui_state.h - 2) - CONTENT_START;
+                if (tui_state.proc_sel >= tui_state.proc_scroll + vis) tui_state.proc_scroll = tui_state.proc_sel - vis + 1;
             } else if (vk == VK_RETURN) {
                 attach_to_selected();
             } else if (vk == VK_F5) {
@@ -466,7 +467,7 @@ static void handle_key(WORD vk, WCHAR ch)
             }
         }
         if (vk == VK_ESCAPE) {
-            g.focus = FOCUS_SIDEBAR;
+            tui_state.focus = FOCUS_SIDEBAR;
         }
         break;
 
@@ -474,27 +475,27 @@ static void handle_key(WORD vk, WCHAR ch)
         if (vk == VK_RETURN) {
             exec_command();
         } else if (vk == VK_BACK) {
-            if (g.cmd_len > 0) g.cmd_buf[--g.cmd_len] = L'\0';
+            if (tui_state.cmd_len > 0) tui_state.cmd_buf[--tui_state.cmd_len] = L'\0';
         } else if (vk == VK_ESCAPE) {
-            g.cmd_len = 0;
-            g.focus = FOCUS_SIDEBAR;
-        } else if (ch >= L' ' && g.cmd_len < CMD_BUF_MAX - 1) {
-            g.cmd_buf[g.cmd_len++] = ch;
-            g.cmd_buf[g.cmd_len] = L'\0';
+            tui_state.cmd_len = 0;
+            tui_state.focus = FOCUS_SIDEBAR;
+        } else if (ch >= L' ' && tui_state.cmd_len < CMD_BUF_MAX - 1) {
+            tui_state.cmd_buf[tui_state.cmd_len++] = ch;
+            tui_state.cmd_buf[tui_state.cmd_len] = L'\0';
         }
         break;
     }
 
     if (vk == VK_TAB) {
-        g.focus = (g.focus + 1) % 3;
+        tui_state.focus = (tui_state.focus + 1) % 3;
     }
 }
 
 static void read_input(void)
 {
-    INPUT_RECORD records[16];
+    INPUT_RECORD records[INPUT_RECORD_BATCH];
     DWORD count = 0;
-    if (!ReadConsoleInputW(g.hIn, records, 16, &count)) return;
+    if (!ReadConsoleInputW(tui_state.hIn, records, INPUT_RECORD_BATCH, &count)) return;
 
     for (DWORD i = 0; i < count; i++) {
         if (records[i].EventType != KEY_EVENT) continue;
@@ -506,34 +507,34 @@ static void read_input(void)
 
 int tui_init(void)
 {
-    g.hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    g.hIn  = GetStdHandle(STD_INPUT_HANDLE);
+    tui_state.hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    tui_state.hIn  = GetStdHandle(STD_INPUT_HANDLE);
 
-    if (g.hOut == INVALID_HANDLE_VALUE || g.hIn == INVALID_HANDLE_VALUE) {
+    if (tui_state.hOut == INVALID_HANDLE_VALUE || tui_state.hIn == INVALID_HANDLE_VALUE) {
         return -1;
     }
 
     CONSOLE_SCREEN_BUFFER_INFO csbi = {0};
-    if (!GetConsoleScreenBufferInfo(g.hOut, &csbi)) return -1;
-    g.w = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-    g.h = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-    if (g.w < 80) g.w = 80;
-    if (g.h < 25) g.h = 25;
+    if (!GetConsoleScreenBufferInfo(tui_state.hOut, &csbi)) return -1;
+    tui_state.w = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    tui_state.h = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    if (tui_state.w < 80) tui_state.w = 80;
+    if (tui_state.h < 25) tui_state.h = 25;
 
     CONSOLE_CURSOR_INFO ci = {0};
-    GetConsoleCursorInfo(g.hOut, &ci);
+    GetConsoleCursorInfo(tui_state.hOut, &ci);
     ci.bVisible = FALSE;
-    SetConsoleCursorInfo(g.hOut, &ci);
+    SetConsoleCursorInfo(tui_state.hOut, &ci);
 
     SetConsoleTitleW(L"MemForge");
 
     DWORD mode;
-    GetConsoleMode(g.hIn, &mode);
+    GetConsoleMode(tui_state.hIn, &mode);
     mode &= ~ENABLE_PROCESSED_INPUT;
     mode &= ~ENABLE_LINE_INPUT;
     mode &= ~ENABLE_ECHO_INPUT;
     mode |= ENABLE_WINDOW_INPUT;
-    SetConsoleMode(g.hIn, mode);
+    SetConsoleMode(tui_state.hIn, mode);
 
     g_attr_normal = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
     g_attr_sel    = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED |
@@ -543,13 +544,13 @@ int tui_init(void)
     g_attr_border = FOREGROUND_INTENSITY;
     g_attr_error  = FOREGROUND_RED | FOREGROUND_INTENSITY;
 
-    g.panel        = PANEL_PROCESSES;
-    g.sidebar_idx  = 0;
-    g.focus        = FOCUS_SIDEBAR;
-    g.running      = TRUE;
+    tui_state.panel        = PANEL_PROCESSES;
+    tui_state.sidebar_idx  = 0;
+    tui_state.focus        = FOCUS_SIDEBAR;
+    tui_state.running      = TRUE;
 
-    memset(&g.target, 0, sizeof(g.target));
-    g.attached = FALSE;
+    memset(&tui_state.target, 0, sizeof(tui_state.target));
+    tui_state.attached = FALSE;
 
     refresh_process_list();
 
@@ -559,34 +560,34 @@ int tui_init(void)
 void tui_shutdown(void)
 {
     CONSOLE_CURSOR_INFO ci = {0};
-    GetConsoleCursorInfo(g.hOut, &ci);
+    GetConsoleCursorInfo(tui_state.hOut, &ci);
     ci.bVisible = TRUE;
-    SetConsoleCursorInfo(g.hOut, &ci);
+    SetConsoleCursorInfo(tui_state.hOut, &ci);
 
     DWORD mode;
-    GetConsoleMode(g.hIn, &mode);
+    GetConsoleMode(tui_state.hIn, &mode);
     mode |= ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
-    SetConsoleMode(g.hIn, mode);
+    SetConsoleMode(tui_state.hIn, mode);
 
-    if (g.attached) {
-        process_detach(&g.target);
-        g.attached = FALSE;
+    if (tui_state.attached) {
+        process_detach(&tui_state.target);
+        tui_state.attached = FALSE;
     }
 
-    if (g.procs) {
-        process_free_list(g.procs);
-        g.procs = NULL;
+    if (tui_state.procs) {
+        process_free_list(tui_state.procs);
+        tui_state.procs = NULL;
     }
 
     DWORD written;
     COORD zero = {0, 0};
-    FillConsoleOutputCharacterW(g.hOut, L' ', (DWORD)(g.w * g.h), zero, &written);
-    SetConsoleCursorPosition(g.hOut, zero);
+    FillConsoleOutputCharacterW(tui_state.hOut, L' ', (DWORD)(tui_state.w * tui_state.h), zero, &written);
+    SetConsoleCursorPosition(tui_state.hOut, zero);
 }
 
 void tui_run(void)
 {
-    while (g.running) {
+    while (tui_state.running) {
         render();
         read_input();
     }

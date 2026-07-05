@@ -13,6 +13,7 @@ add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 add_executable(memforge
     tui/main.c
     tui/tui.c
+    tui/render.c
     core/process/process.c
     core/memory/memory.c
     platform/platform.c

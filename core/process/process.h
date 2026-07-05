@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include "platform/platform.h"
 
-#define PROCESS_NAME_MAX 260
+#define PROCESS_NAME_MAX PLATFORM_NAME_MAX
 
 typedef struct {
     unsigned int pid;
