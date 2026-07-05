@@ -9,10 +9,10 @@ typedef struct {
     size_t             size;
     unsigned int       protect;
     unsigned int       state;
-} MemRegion;
+} MemoryRegion;
 
-PlatError mem_read(const Target *target, unsigned long long address, void *buffer, size_t size);
-PlatError mem_write(const Target *target, unsigned long long address, const void *buffer, size_t size);
-PlatError mem_query(const Target *target, unsigned long long address, MemRegion *region);
+PlatformError memory_read(const Target *target, unsigned long long address, void *buffer, size_t size);
+PlatformError memory_write(const Target *target, unsigned long long address, const void *buffer, size_t size);
+PlatformError memory_query(const Target *target, unsigned long long address, MemoryRegion *region);
 
 #endif

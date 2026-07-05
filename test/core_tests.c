@@ -19,69 +19,69 @@ static void check(int cond, const char *msg)
 static void test_error_strings(void)
 {
     printf("--- error string mapping ---\n");
-    check(strcmp(proc_error_string(PLAT_ERR_ACCESS_DENIED), "access denied (try running as administrator)") == 0,
-          "PLAT_ERR_ACCESS_DENIED resolves");
-    check(strcmp(proc_error_string(PLAT_ERR_NOT_FOUND), "process not found") == 0,
-          "PLAT_ERR_NOT_FOUND resolves");
-    check(strcmp(proc_error_string(PLAT_ERR_PARTIAL_READ), "partial read from target memory") == 0,
-          "PLAT_ERR_PARTIAL_READ resolves");
-    check(strcmp(proc_error_string(PLAT_ERR_INTERNAL), "internal error (out of memory)") == 0,
-          "PLAT_ERR_INTERNAL resolves");
-    check(strcmp(proc_error_string(PLAT_OK), "no error") == 0,
-          "PLAT_OK resolves to 'no error'");
-    check(strcmp(proc_error_string((PlatError)999), "unknown error") == 0,
+    check(strcmp(process_error_string(PLATFORM_ERR_ACCESS_DENIED), "access denied (try running as administrator)") == 0,
+          "PLATFORM_ERR_ACCESS_DENIED resolves");
+    check(strcmp(process_error_string(PLATFORM_ERR_NOT_FOUND), "process not found") == 0,
+          "PLATFORM_ERR_NOT_FOUND resolves");
+    check(strcmp(process_error_string(PLATFORM_ERR_PARTIAL_READ), "partial read from target memory") == 0,
+          "PLATFORM_ERR_PARTIAL_READ resolves");
+    check(strcmp(process_error_string(PLATFORM_ERR_INTERNAL), "internal error (out of memory)") == 0,
+          "PLATFORM_ERR_INTERNAL resolves");
+    check(strcmp(process_error_string(PLATFORM_OK), "no error") == 0,
+          "PLATFORM_OK resolves to 'no error'");
+    check(strcmp(process_error_string((PlatformError)999), "unknown error") == 0,
           "out-of-range code falls back to 'unknown error'");
 }
 
-static void test_mem_boundary(void)
+static void test_memory_boundary(void)
 {
     printf("--- memory boundary validation ---\n");
     Target empty_target = {0};
     unsigned char buf[4];
 
-    check(mem_read(NULL, 0x1000, buf, sizeof(buf)) != PLAT_OK,
-          "mem_read with NULL target fails");
-    check(mem_read(&empty_target, 0x1000, buf, sizeof(buf)) != PLAT_OK,
-          "mem_read with empty target fails");
-    check(mem_read(&empty_target, 0x1000, NULL, sizeof(buf)) != PLAT_OK,
-          "mem_read with NULL buffer fails");
-    check(mem_read(&empty_target, 0x1000, buf, 0) != PLAT_OK,
-          "mem_read with zero size fails");
+    check(memory_read(NULL, 0x1000, buf, sizeof(buf)) != PLATFORM_OK,
+          "memory_read with NULL target fails");
+    check(memory_read(&empty_target, 0x1000, buf, sizeof(buf)) != PLATFORM_OK,
+          "memory_read with empty target fails");
+    check(memory_read(&empty_target, 0x1000, NULL, sizeof(buf)) != PLATFORM_OK,
+          "memory_read with NULL buffer fails");
+    check(memory_read(&empty_target, 0x1000, buf, 0) != PLATFORM_OK,
+          "memory_read with zero size fails");
 
-    check(mem_write(NULL, 0x1000, buf, sizeof(buf)) != PLAT_OK,
-          "mem_write with NULL target fails");
-    check(mem_write(&empty_target, 0x1000, buf, sizeof(buf)) != PLAT_OK,
-          "mem_write with empty target fails");
-    check(mem_write(&empty_target, 0x1000, NULL, sizeof(buf)) != PLAT_OK,
-          "mem_write with NULL buffer fails");
+    check(memory_write(NULL, 0x1000, buf, sizeof(buf)) != PLATFORM_OK,
+          "memory_write with NULL target fails");
+    check(memory_write(&empty_target, 0x1000, buf, sizeof(buf)) != PLATFORM_OK,
+          "memory_write with empty target fails");
+    check(memory_write(&empty_target, 0x1000, NULL, sizeof(buf)) != PLATFORM_OK,
+          "memory_write with NULL buffer fails");
 
-    MemRegion region = {0};
-    check(mem_query(NULL, 0x1000, &region) != PLAT_OK,
-          "mem_query with NULL target fails");
-    check(mem_query(&empty_target, 0x1000, &region) != PLAT_OK,
-          "mem_query with empty target fails");
-    check(mem_query(&empty_target, 0x1000, NULL) != PLAT_OK,
-          "mem_query with NULL region fails");
+    MemoryRegion region = {0};
+    check(memory_query(NULL, 0x1000, &region) != PLATFORM_OK,
+          "memory_query with NULL target fails");
+    check(memory_query(&empty_target, 0x1000, &region) != PLATFORM_OK,
+          "memory_query with empty target fails");
+    check(memory_query(&empty_target, 0x1000, NULL) != PLATFORM_OK,
+          "memory_query with NULL region fails");
 }
 
-static void test_proc_boundary(void)
+static void test_process_boundary(void)
 {
     printf("--- process boundary validation ---\n");
-    check(proc_enumerate(NULL, NULL) != PLAT_OK,
-          "proc_enumerate with NULL args fails");
-    check(proc_attach(0, NULL) != PLAT_OK,
-          "proc_attach with NULL target fails");
+    check(process_list(NULL, NULL) != PLATFORM_OK,
+          "process_list with NULL args fails");
+    check(process_attach(0, NULL) != PLATFORM_OK,
+          "process_attach with NULL target fails");
 
     unsigned int count = 0;
-    check(proc_enumerate(NULL, &count) != PLAT_OK,
-          "proc_enumerate with NULL entries pointer fails");
+    check(process_list(NULL, &count) != PLATFORM_OK,
+          "process_list with NULL entries pointer fails");
 }
 
 int main(void)
 {
     test_error_strings();
-    test_mem_boundary();
-    test_proc_boundary();
+    test_memory_boundary();
+    test_process_boundary();
 
     printf("\n%d failure(s)\n", failures);
     return failures > 0 ? 1 : 0;

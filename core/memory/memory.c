@@ -1,34 +1,34 @@
 #include "core/memory/memory.h"
 
-PlatError mem_read(const Target *target, unsigned long long address, void *buffer, size_t size)
+PlatformError memory_read(const Target *target, unsigned long long address, void *buffer, size_t size)
 {
     if (!target || !target->handle || !buffer || size == 0) {
-        return PLAT_ERR_INVALID_PARAM;
+        return PLATFORM_ERR_INVALID_PARAM;
     }
 
     size_t bytes_read = 0;
-    return plat_read_memory(target->handle, address, buffer, size, &bytes_read);
+    return platform_read_memory(target->handle, address, buffer, size, &bytes_read);
 }
 
-PlatError mem_write(const Target *target, unsigned long long address, const void *buffer, size_t size)
+PlatformError memory_write(const Target *target, unsigned long long address, const void *buffer, size_t size)
 {
     if (!target || !target->handle || !buffer || size == 0) {
-        return PLAT_ERR_INVALID_PARAM;
+        return PLATFORM_ERR_INVALID_PARAM;
     }
 
     size_t bytes_written = 0;
-    return plat_write_memory(target->handle, address, buffer, size, &bytes_written);
+    return platform_write_memory(target->handle, address, buffer, size, &bytes_written);
 }
 
-PlatError mem_query(const Target *target, unsigned long long address, MemRegion *region)
+PlatformError memory_query(const Target *target, unsigned long long address, MemoryRegion *region)
 {
     if (!target || !target->handle || !region) {
-        return PLAT_ERR_INVALID_PARAM;
+        return PLATFORM_ERR_INVALID_PARAM;
     }
 
-    PlatRegionInfo info = {0};
-    PlatError err = plat_query_region(target->handle, address, &info);
-    if (err != PLAT_OK) {
+    PlatformRegionInfo info = {0};
+    PlatformError err = platform_query_region(target->handle, address, &info);
+    if (err != PLATFORM_OK) {
         return err;
     }
 
@@ -37,5 +37,5 @@ PlatError mem_query(const Target *target, unsigned long long address, MemRegion 
     region->protect = info.protect;
     region->state   = info.state;
 
-    return PLAT_OK;
+    return PLATFORM_OK;
 }

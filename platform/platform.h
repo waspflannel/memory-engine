@@ -4,25 +4,25 @@
 #include <stddef.h>
 
 typedef enum {
-    PLAT_OK = 0,
-    PLAT_ERR_ACCESS_DENIED,
-    PLAT_ERR_NOT_FOUND,
-    PLAT_ERR_PARTIAL_READ,
-    PLAT_ERR_PARTIAL_WRITE,
-    PLAT_ERR_READ_FAILED,
-    PLAT_ERR_WRITE_FAILED,
-    PLAT_ERR_INVALID_PARAM,
-    PLAT_ERR_QUERY_FAILED,
-    PLAT_ERR_SNAPSHOT_FAILED,
-    PLAT_ERR_MODULE_FAILED,
-    PLAT_ERR_PRIVILEGE_FAILED,
-    PLAT_ERR_INTERNAL,
-} PlatError;
+    PLATFORM_OK = 0,
+    PLATFORM_ERR_ACCESS_DENIED,
+    PLATFORM_ERR_NOT_FOUND,
+    PLATFORM_ERR_PARTIAL_READ,
+    PLATFORM_ERR_PARTIAL_WRITE,
+    PLATFORM_ERR_READ_FAILED,
+    PLATFORM_ERR_WRITE_FAILED,
+    PLATFORM_ERR_INVALID_PARAM,
+    PLATFORM_ERR_QUERY_FAILED,
+    PLATFORM_ERR_SNAPSHOT_FAILED,
+    PLATFORM_ERR_MODULE_FAILED,
+    PLATFORM_ERR_PRIVILEGE_FAILED,
+    PLATFORM_ERR_INTERNAL,
+} PlatformError;
 
 typedef struct {
     unsigned int  pid;
     wchar_t       name[260];
-} PlatProcessEntry;
+} PlatformProcessEntry;
 
 typedef struct {
     unsigned long long base;
@@ -30,30 +30,30 @@ typedef struct {
     unsigned int       protect;
     unsigned int       state;
     unsigned int       type;
-} PlatRegionInfo;
+} PlatformRegionInfo;
 
 typedef struct {
     unsigned long long base;
     size_t             size;
     wchar_t            name[260];
-} PlatModuleInfo;
+} PlatformModuleInfo;
 
-PlatError  plat_enumerate_processes(PlatProcessEntry **entries, unsigned int *count);
-void       plat_free_process_list(PlatProcessEntry *entries);
+PlatformError  platform_list_processes(PlatformProcessEntry **entries, unsigned int *count);
+void           platform_free_process_list(PlatformProcessEntry *entries);
 
-PlatError  plat_open_process(unsigned int pid, void **handle);
-void       plat_close_handle(void *handle);
+PlatformError  platform_open_process(unsigned int pid, void **handle);
+void           platform_close_handle(void *handle);
 
-PlatError  plat_read_memory(void *handle, unsigned long long address, void *buffer, size_t size, size_t *bytes_read);
-PlatError  plat_write_memory(void *handle, unsigned long long address, const void *buffer, size_t size, size_t *bytes_written);
+PlatformError  platform_read_memory(void *handle, unsigned long long address, void *buffer, size_t size, size_t *bytes_read);
+PlatformError  platform_write_memory(void *handle, unsigned long long address, const void *buffer, size_t size, size_t *bytes_written);
 
-PlatError  plat_query_region(void *handle, unsigned long long address, PlatRegionInfo *info);
+PlatformError  platform_query_region(void *handle, unsigned long long address, PlatformRegionInfo *info);
 
-PlatError  plat_get_main_module(void *handle, PlatModuleInfo *info);
+PlatformError  platform_get_main_module(void *handle, PlatformModuleInfo *info);
 
-PlatError  plat_enable_debug_privilege(void);
+PlatformError  platform_enable_debug_privilege(void);
 
-unsigned int plat_last_os_error(void);
-PlatError    plat_last_err(void);
+unsigned int   platform_last_os_error(void);
+PlatformError  platform_last_error(void);
 
 #endif

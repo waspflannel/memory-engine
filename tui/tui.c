@@ -278,32 +278,32 @@ static void set_status(const wchar_t *msg, int is_error)
 static void refresh_process_list(void)
 {
     if (g.procs) {
-        proc_free_list(g.procs);
+        process_free_list(g.procs);
         g.procs = NULL;
     }
     g.proc_count = 0;
     g.proc_sel   = 0;
     g.proc_scroll = 0;
 
-    PlatError err = proc_enumerate(&g.procs, &g.proc_count);
-    if (err != PLAT_OK) {
-        set_status(L"Failed to enumerate processes", TRUE);
+    PlatformError err = process_list(&g.procs, &g.proc_count);
+    if (err != PLATFORM_OK) {
+        set_status(L"Failed to list processes", TRUE);
     }
 }
 
 static int do_attach(DWORD pid)
 {
     if (g.attached) {
-        proc_detach(&g.target);
+        process_detach(&g.target);
         g.attached = FALSE;
     }
 
-    proc_enable_privilege();
+    process_enable_privilege();
 
-    PlatError err = proc_attach(pid, &g.target);
-    if (err != PLAT_OK) {
+    PlatformError err = process_attach(pid, &g.target);
+    if (err != PLATFORM_OK) {
         wchar_t msg[512];
-        swprintf_s(msg, 512, L"Failed to attach to PID %u: %S", pid, proc_error_string(err));
+        swprintf_s(msg, 512, L"Failed to attach to PID %u: %S", pid, process_error_string(err));
         set_status(msg, TRUE);
         return 0;
     }
@@ -330,18 +330,18 @@ static void cmd_read(const wchar_t *args)
         return;
     }
 
-    unsigned long long addr = 0;
+    unsigned long long address = 0;
     int size = 0;
-    if (swscanf_s(args, L"%llx %d", &addr, &size) != 2 || size <= 0 || size > 512) {
+    if (swscanf_s(args, L"%llx %d", &address, &size) != 2 || size <= 0 || size > 512) {
         set_status(L"usage: read <hex_address> <size_in_bytes>", TRUE);
         return;
     }
 
     unsigned char buf[512];
-    PlatError err = mem_read(&g.target, addr, buf, (size_t)size);
-    if (err != PLAT_OK) {
+    PlatformError err = memory_read(&g.target, address, buf, (size_t)size);
+    if (err != PLATFORM_OK) {
         wchar_t msg[256];
-        swprintf_s(msg, 256, L"read failed: %S", proc_error_string(err));
+        swprintf_s(msg, 256, L"read failed: %S", process_error_string(err));
         set_status(msg, TRUE);
         return;
     }
@@ -361,9 +361,9 @@ static void cmd_write(const wchar_t *args)
         return;
     }
 
-    unsigned long long addr = 0;
+    unsigned long long address = 0;
     wchar_t hex[256] = {0};
-    if (swscanf_s(args, L"%llx %s", &addr, hex, (unsigned int)(sizeof(hex) / sizeof(wchar_t))) != 2) {
+    if (swscanf_s(args, L"%llx %s", &address, hex, (unsigned int)(sizeof(hex) / sizeof(wchar_t))) != 2) {
         set_status(L"usage: write <hex_address> <hex_bytes>", TRUE);
         return;
     }
@@ -388,16 +388,16 @@ static void cmd_write(const wchar_t *args)
         swscanf_s(hex + (i * 2), L"%2hhx", &buf[i]);
     }
 
-    PlatError err = mem_write(&g.target, addr, buf, (size_t)byte_count);
-    if (err != PLAT_OK) {
+    PlatformError err = memory_write(&g.target, address, buf, (size_t)byte_count);
+    if (err != PLATFORM_OK) {
         wchar_t msg[256];
-        swprintf_s(msg, 256, L"write failed: %S", proc_error_string(err));
+        swprintf_s(msg, 256, L"write failed: %S", process_error_string(err));
         set_status(msg, TRUE);
         return;
     }
 
     wchar_t msg[256];
-    swprintf_s(msg, 256, L"Wrote %d byte(s) to 0x%llX", byte_count, addr);
+    swprintf_s(msg, 256, L"Wrote %d byte(s) to 0x%llX", byte_count, address);
     set_status(msg, FALSE);
 }
 
@@ -424,7 +424,7 @@ static void exec_command(void)
 
     if (wcscmp(g.cmd_buf, L"detach") == 0) {
         if (g.attached) {
-            proc_detach(&g.target);
+            process_detach(&g.target);
             g.attached = FALSE;
             set_status(L"Detached", FALSE);
         } else {
@@ -588,12 +588,12 @@ void tui_shutdown(void)
     SetConsoleMode(g.hIn, mode);
 
     if (g.attached) {
-        proc_detach(&g.target);
+        process_detach(&g.target);
         g.attached = FALSE;
     }
 
     if (g.procs) {
-        proc_free_list(g.procs);
+        process_free_list(g.procs);
         g.procs = NULL;
     }
 

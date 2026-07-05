@@ -3,113 +3,113 @@
 #include <wchar.h>
 #include "core/process/process.h"
 
-PlatError proc_enumerate(ProcessEntry **entries, unsigned int *count)
+PlatformError process_list(ProcessEntry **entries, unsigned int *count)
 {
     if (!entries || !count) {
-        return PLAT_ERR_INVALID_PARAM;
+        return PLATFORM_ERR_INVALID_PARAM;
     }
 
-    PlatProcessEntry *plat_entries = NULL;
-    unsigned int plat_count = 0;
+    PlatformProcessEntry *platform_entries = NULL;
+    unsigned int platform_count = 0;
 
-    PlatError err = plat_enumerate_processes(&plat_entries, &plat_count);
-    if (err != PLAT_OK) {
+    PlatformError err = platform_list_processes(&platform_entries, &platform_count);
+    if (err != PLATFORM_OK) {
         return err;
     }
 
-    ProcessEntry *list = (ProcessEntry *)malloc(plat_count * sizeof(ProcessEntry));
+    ProcessEntry *list = (ProcessEntry *)malloc(platform_count * sizeof(ProcessEntry));
     if (!list) {
-        plat_free_process_list(plat_entries);
-        return PLAT_ERR_INTERNAL;
+        platform_free_process_list(platform_entries);
+        return PLATFORM_ERR_INTERNAL;
     }
 
-    for (unsigned int i = 0; i < plat_count; i++) {
-        list[i].pid = plat_entries[i].pid;
-        wcsncpy(list[i].name, plat_entries[i].name, PROC_NAME_MAX - 1);
-        list[i].name[PROC_NAME_MAX - 1] = L'\0';
+    for (unsigned int i = 0; i < platform_count; i++) {
+        list[i].pid = platform_entries[i].pid;
+        wcsncpy(list[i].name, platform_entries[i].name, PROCESS_NAME_MAX - 1);
+        list[i].name[PROCESS_NAME_MAX - 1] = L'\0';
     }
 
-    plat_free_process_list(plat_entries);
+    platform_free_process_list(platform_entries);
     *entries = list;
-    *count   = plat_count;
-    return PLAT_OK;
+    *count   = platform_count;
+    return PLATFORM_OK;
 }
 
-void proc_free_list(ProcessEntry *entries)
+void process_free_list(ProcessEntry *entries)
 {
     free(entries);
 }
 
-PlatError proc_attach(unsigned int pid, Target *target)
+PlatformError process_attach(unsigned int pid, Target *target)
 {
-    if (!target) return PLAT_ERR_INVALID_PARAM;
+    if (!target) return PLATFORM_ERR_INVALID_PARAM;
 
     memset(target, 0, sizeof(*target));
 
     void *h = NULL;
-    PlatError err = plat_open_process(pid, &h);
-    if (err != PLAT_OK) {
+    PlatformError err = platform_open_process(pid, &h);
+    if (err != PLATFORM_OK) {
         return err;
     }
 
     target->handle = h;
     target->pid = pid;
 
-    PlatModuleInfo modInfo = {0};
-    err = plat_get_main_module(h, &modInfo);
-    if (err != PLAT_OK) {
-        plat_close_handle(h);
+    PlatformModuleInfo module_info = {0};
+    err = platform_get_main_module(h, &module_info);
+    if (err != PLATFORM_OK) {
+        platform_close_handle(h);
         target->handle = NULL;
         return err;
     }
 
-    target->base      = modInfo.base;
-    target->base_size = modInfo.size;
-    wcsncpy(target->name, modInfo.name, PROC_NAME_MAX - 1);
-    target->name[PROC_NAME_MAX - 1] = L'\0';
+    target->base      = module_info.base;
+    target->base_size = module_info.size;
+    wcsncpy(target->name, module_info.name, PROCESS_NAME_MAX - 1);
+    target->name[PROCESS_NAME_MAX - 1] = L'\0';
 
-    return PLAT_OK;
+    return PLATFORM_OK;
 }
 
-void proc_detach(Target *target)
+void process_detach(Target *target)
 {
     if (target && target->handle) {
-        plat_close_handle(target->handle);
+        platform_close_handle(target->handle);
         memset(target, 0, sizeof(*target));
     }
 }
 
-PlatError proc_enable_privilege(void)
+PlatformError process_enable_privilege(void)
 {
-    return plat_enable_debug_privilege();
+    return platform_enable_debug_privilege();
 }
 
-int proc_last_error(void)
+int process_last_os_error(void)
 {
-    return (int)plat_last_os_error();
+    return (int)platform_last_os_error();
 }
 
-const char *proc_error_string(PlatError err)
+const char *process_error_string(PlatformError err)
 {
     switch (err) {
-    case PLAT_OK:                  return "no error";
-    case PLAT_ERR_ACCESS_DENIED:   return "access denied (try running as administrator)";
-    case PLAT_ERR_NOT_FOUND:       return "process not found";
-    case PLAT_ERR_MODULE_FAILED:   return "failed to query module info";
-    case PLAT_ERR_INVALID_PARAM:   return "invalid parameter";
-    case PLAT_ERR_SNAPSHOT_FAILED: return "failed to enumerate processes";
-    case PLAT_ERR_PARTIAL_READ:    return "partial read from target memory";
-    case PLAT_ERR_READ_FAILED:     return "failed to read target memory";
-    case PLAT_ERR_PARTIAL_WRITE:   return "partial write to target memory";
-    case PLAT_ERR_WRITE_FAILED:     return "failed to write target memory";
-    case PLAT_ERR_QUERY_FAILED:    return "failed to query memory region";
-    case PLAT_ERR_PRIVILEGE_FAILED: return "failed to enable debug privilege";
-    case PLAT_ERR_INTERNAL:        return "internal error (out of memory)";
-    default:                       return "unknown error";
+    case PLATFORM_OK:                  return "no error";
+    case PLATFORM_ERR_ACCESS_DENIED:   return "access denied (try running as administrator)";
+    case PLATFORM_ERR_NOT_FOUND:       return "process not found";
+    case PLATFORM_ERR_MODULE_FAILED:   return "failed to query module info";
+    case PLATFORM_ERR_INVALID_PARAM:   return "invalid parameter";
+    case PLATFORM_ERR_SNAPSHOT_FAILED: return "failed to list processes";
+    case PLATFORM_ERR_PARTIAL_READ:    return "partial read from target memory";
+    case PLATFORM_ERR_READ_FAILED:     return "failed to read target memory";
+    case PLATFORM_ERR_PARTIAL_WRITE:   return "partial write to target memory";
+    case PLATFORM_ERR_WRITE_FAILED:    return "failed to write target memory";
+    case PLATFORM_ERR_QUERY_FAILED:    return "failed to query memory region";
+    case PLATFORM_ERR_PRIVILEGE_FAILED: return "failed to enable debug privilege";
+    case PLATFORM_ERR_INTERNAL:        return "internal error (out of memory)";
+    default:                           return "unknown error";
     }
 }
 
-const char *proc_last_error_string(void)
+const char *process_last_error_string(void)
 {
-    return proc_error_string(plat_last_err());
+    return process_error_string(platform_last_error());
 }
