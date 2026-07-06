@@ -46,19 +46,19 @@ PlatformError process_attach(unsigned int pid, Target *target)
 
     memset(target, 0, sizeof(*target));
 
-    void *h = NULL;
-    PlatformError err = platform_open_process(pid, &h);
+    void *handle = NULL;
+    PlatformError err = platform_open_process(pid, &handle);
     if (err != PLATFORM_OK) {
         return err;
     }
 
-    target->handle = h;
+    target->handle = handle;
     target->pid = pid;
 
     PlatformModuleInfo module_info = {0};
-    err = platform_get_main_module(h, &module_info);
+    err = platform_get_main_module(handle, &module_info);
     if (err != PLATFORM_OK) {
-        platform_close_handle(h);
+        platform_close_handle(handle);
         target->handle = NULL;
         return err;
     }
