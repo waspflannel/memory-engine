@@ -52,11 +52,15 @@ static const wchar_t *s_sidebar_labels[PANEL_COUNT] = {
     L"Profiles",
 };
 
-static WORD s_attr_normal = 0;
-static WORD s_attr_sel    = 0;
-static WORD s_attr_header = 0;
-static WORD s_attr_border = 0;
-static WORD s_attr_error  = 0;
+static const WORD s_attr_normal = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+
+static const WORD s_attr_sel = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED;
+
+static const WORD s_attr_header = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+
+static const WORD s_attr_border = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+
+static const WORD s_attr_error = FOREGROUND_RED;
 
 static struct {
     HANDLE hOut;
@@ -147,9 +151,12 @@ static void draw_sidebar(Screen *screen)
         int row = CONTENT_START + i;
         if (row >= tui_state.height - 2) break;
 
-        WORD attr = (i == tui_state.sidebar_idx && tui_state.focus == FOCUS_SIDEBAR)
-                      ? s_attr_sel : s_attr_normal;
-
+        WORD attr;
+        if (i == tui_state.sidebar_idx && tui_state.focus == FOCUS_SIDEBAR) {
+            attr = s_attr_sel;
+        } else {
+            attr = s_attr_normal;
+        }
         for (int x = 1; x < sb_end; x++) {
             screen_put(screen, x, row, L' ', attr);
         }
@@ -163,7 +170,7 @@ static void draw_process_list(Screen *screen)
     int main_w = tui_state.width - main_x - 1;
     if (main_w < 10) return;
 
-    int vis_rows = (tui_state.height - 2) - CONTENT_START;
+    int vis_rows = (tui_state.height - 3) - CONTENT_START;
     if (vis_rows <= 0) return;
 
     int max_scroll = (int)tui_state.process_count - vis_rows;
@@ -179,8 +186,12 @@ static void draw_process_list(Screen *screen)
 
         ProcessEntry *entry = &tui_state.processes[pi];
         swprintf_s(line, _countof(line), L"%5u  %s", entry->pid, entry->name);
-        WORD attr = (pi == tui_state.selected_process && tui_state.focus == FOCUS_MAIN)
-                      ? s_attr_sel : s_attr_normal;
+        WORD attr;
+        if (pi == tui_state.selected_process && tui_state.focus == FOCUS_MAIN) {
+            attr = s_attr_sel;
+        } else {
+            attr = s_attr_normal;
+        }
         screen_text(screen, main_x, row, line, attr);
         int used = (int)wcslen(line);
         for (int x = main_x + used; x < tui_state.width - 1; x++) {
@@ -193,11 +204,6 @@ static void draw_main_panel(Screen *screen)
 {
     int sb_end = 1 + SIDEBAR_WIDTH;
     int main_x = sb_end + 1;
-    WORD attr = s_attr_border;
-
-    for (int y = CONTENT_START; y < tui_state.height - 2; y++) {
-        screen_put(screen, sb_end, y, BOX_V, attr);
-    }
 
     if (tui_state.panel == PANEL_PROCESSES) {
         if (tui_state.process_count > 0) {
@@ -221,7 +227,12 @@ static void draw_command(Screen *screen)
         screen_text(screen, 1, cmd_row, display, attr);
     } else {
         swprintf_s(display, STATUS_MSG_MAX, L" > %s", tui_state.cmd_buf);
-        WORD attr = (tui_state.focus == FOCUS_COMMAND) ? s_attr_sel : s_attr_normal;
+        WORD attr;
+        if (tui_state.focus == FOCUS_COMMAND) {
+            attr = s_attr_sel;
+        } else {
+            attr = s_attr_normal;
+        }
         screen_text(screen, 1, cmd_row, display, attr);
         if (tui_state.focus == FOCUS_COMMAND) {
             int cursor_x = 4 + tui_state.cmd_len;
@@ -457,8 +468,8 @@ static void handle_key(WORD vk, WCHAR ch)
                 if (tui_state.selected_process < tui_state.process_scroll) tui_state.process_scroll = tui_state.selected_process;
             } else if (vk == VK_DOWN && (unsigned int)tui_state.selected_process + 1 < tui_state.process_count) {
                 tui_state.selected_process++;
-                int vis = (tui_state.height - 2) - CONTENT_START;
-                if (tui_state.selected_process >= tui_state.process_scroll + vis) tui_state.process_scroll = tui_state.selected_process - vis + 1;
+                int vis_rows = (tui_state.height - 3) - CONTENT_START;
+                if (tui_state.selected_process >= tui_state.process_scroll + vis_rows) tui_state.process_scroll = tui_state.selected_process - vis_rows + 1;
             } else if (vk == VK_RETURN) {
                 attach_to_selected();
             } else if (vk == VK_F5) {
@@ -535,14 +546,6 @@ int tui_init(void)
     mode &= ~ENABLE_ECHO_INPUT;
     mode |= ENABLE_WINDOW_INPUT;
     SetConsoleMode(tui_state.hIn, mode);
-
-    s_attr_normal = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-    s_attr_sel    = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED |
-                    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-    s_attr_header = BACKGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN |
-                    FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-    s_attr_border = FOREGROUND_INTENSITY;
-    s_attr_error  = FOREGROUND_RED | FOREGROUND_INTENSITY;
 
     tui_state.panel        = PANEL_PROCESSES;
     tui_state.sidebar_idx  = 0;
