@@ -9,78 +9,13 @@
 static unsigned int  s_last_os_error = 0;
 static PlatformError s_last_error    = PLATFORM_OK;
 
-static PlatformError fail(PlatformError err)
-{
-    s_last_error    = err;
-    s_last_os_error = (unsigned int)GetLastError();
-    return err;
-}
+/* Forward declarations — definitions at bottom of file. */
+static PlatformError fail(PlatformError err);
+static PlatformError fail_with_os(PlatformError err, unsigned int os_err);
+static PlatformError succeed(void);
+static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity, unsigned int n);
 
-static PlatformError fail_with_os(PlatformError err, unsigned int os_err)
-{
-    s_last_error    = err;
-    s_last_os_error = os_err;
-    return err;
-}
-
-static PlatformError succeed(void)
-{
-    s_last_error = PLATFORM_OK;
-    return PLATFORM_OK;
-}
-
-unsigned int platform_last_os_error(void)
-{
-    return s_last_os_error;
-}
-
-PlatformError platform_last_error(void)
-{
-    return s_last_error;
-}
-
-PlatformError platform_enable_debug_privilege(void)
-{
-    HANDLE token = NULL;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
-        return fail(PLATFORM_ERR_PRIVILEGE_FAILED);
-    }
-
-    TOKEN_PRIVILEGES tp = {0};
-    if (!LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &tp.Privileges[0].Luid)) {
-        DWORD os_err = GetLastError();
-        CloseHandle(token);
-        return fail_with_os(PLATFORM_ERR_PRIVILEGE_FAILED, os_err);
-    }
-
-    tp.PrivilegeCount = 1;
-    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-
-    AdjustTokenPrivileges(token, FALSE, &tp, sizeof(tp), NULL, NULL);
-    DWORD err = GetLastError();
-    CloseHandle(token);
-
-    if (err != ERROR_SUCCESS) {
-        return fail_with_os(PLATFORM_ERR_PRIVILEGE_FAILED, err);
-    }
-
-    return succeed();
-}
-
-static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity, unsigned int n)
-{
-    *capacity *= 2;
-    PlatformProcessEntry *grown = (PlatformProcessEntry *)HeapAlloc(
-        GetProcessHeap(), 0, *capacity * sizeof(PlatformProcessEntry));
-    if (!grown) {
-        HeapFree(GetProcessHeap(), 0, *list);
-        return fail_with_os(PLATFORM_ERR_INTERNAL, ERROR_OUTOFMEMORY);
-    }
-    memcpy(grown, *list, n * sizeof(PlatformProcessEntry));
-    HeapFree(GetProcessHeap(), 0, *list);
-    *list = grown;
-    return succeed();
-}
+/* ---- Public API (order matches platform.h) ---- */
 
 PlatformError platform_list_processes(PlatformProcessEntry **entries, unsigned int *count)
 {
@@ -285,5 +220,80 @@ PlatformError platform_get_main_module(void *handle, PlatformModuleInfo *info)
         return fail(PLATFORM_ERR_MODULE_FAILED);
     }
 
+    return succeed();
+}
+
+PlatformError platform_enable_debug_privilege(void)
+{
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
+        return fail(PLATFORM_ERR_PRIVILEGE_FAILED);
+    }
+
+    TOKEN_PRIVILEGES tp = {0};
+    if (!LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &tp.Privileges[0].Luid)) {
+        DWORD os_err = GetLastError();
+        CloseHandle(token);
+        return fail_with_os(PLATFORM_ERR_PRIVILEGE_FAILED, os_err);
+    }
+
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    AdjustTokenPrivileges(token, FALSE, &tp, sizeof(tp), NULL, NULL);
+    DWORD err = GetLastError();
+    CloseHandle(token);
+
+    if (err != ERROR_SUCCESS) {
+        return fail_with_os(PLATFORM_ERR_PRIVILEGE_FAILED, err);
+    }
+
+    return succeed();
+}
+
+unsigned int platform_last_os_error(void)
+{
+    return s_last_os_error;
+}
+
+PlatformError platform_last_error(void)
+{
+    return s_last_error;
+}
+
+/* ---- Static helpers ---- */
+
+static PlatformError fail(PlatformError err)
+{
+    s_last_error    = err;
+    s_last_os_error = (unsigned int)GetLastError();
+    return err;
+}
+
+static PlatformError fail_with_os(PlatformError err, unsigned int os_err)
+{
+    s_last_error    = err;
+    s_last_os_error = os_err;
+    return err;
+}
+
+static PlatformError succeed(void)
+{
+    s_last_error = PLATFORM_OK;
+    return PLATFORM_OK;
+}
+
+static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity, unsigned int n)
+{
+    *capacity *= 2;
+    PlatformProcessEntry *grown = (PlatformProcessEntry *)HeapAlloc(
+        GetProcessHeap(), 0, *capacity * sizeof(PlatformProcessEntry));
+    if (!grown) {
+        HeapFree(GetProcessHeap(), 0, *list);
+        return fail_with_os(PLATFORM_ERR_INTERNAL, ERROR_OUTOFMEMORY);
+    }
+    memcpy(grown, *list, n * sizeof(PlatformProcessEntry));
+    HeapFree(GetProcessHeap(), 0, *list);
+    *list = grown;
     return succeed();
 }

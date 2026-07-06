@@ -90,7 +90,108 @@ static struct {
     int running;
 } tui_state;
 
-/* ---- screen composition (what to draw; uses render.h for how) ---- */
+/* Forward declarations — definitions at bottom of file. */
+static void draw_borders(Screen *screen);
+static void draw_sep_row(Screen *screen, int y, int split);
+static void draw_header(Screen *screen);
+static void draw_sidebar(Screen *screen);
+static void draw_process_list(Screen *screen);
+static void draw_main_panel(Screen *screen);
+static void draw_command(Screen *screen);
+static void render(void);
+static void set_status(const wchar_t *msg, int is_error);
+static void refresh_process_list(void);
+static int  do_attach(DWORD pid);
+static void attach_to_selected(void);
+static void cmd_read(const wchar_t *args);
+static void cmd_write(const wchar_t *args);
+static void exec_command(void);
+static void handle_key(WORD vk, WCHAR ch);
+static void read_input(void);
+
+/* ---- Public API (order matches tui.h) ---- */
+
+int tui_init(void)
+{
+    tui_state.hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    tui_state.hIn  = GetStdHandle(STD_INPUT_HANDLE);
+
+    if (tui_state.hOut == INVALID_HANDLE_VALUE || tui_state.hIn == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+
+    CONSOLE_SCREEN_BUFFER_INFO csbi = {0};
+    if (!GetConsoleScreenBufferInfo(tui_state.hOut, &csbi)) return -1;
+    tui_state.width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    tui_state.height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    if (tui_state.width < 80) tui_state.width = 80;
+    if (tui_state.height < 25) tui_state.height = 25;
+
+    CONSOLE_CURSOR_INFO ci = {0};
+    GetConsoleCursorInfo(tui_state.hOut, &ci);
+    ci.bVisible = FALSE;
+    SetConsoleCursorInfo(tui_state.hOut, &ci);
+
+    SetConsoleTitleW(L"MemForge");
+
+    DWORD mode;
+    GetConsoleMode(tui_state.hIn, &mode);
+    mode &= ~ENABLE_PROCESSED_INPUT;
+    mode &= ~ENABLE_LINE_INPUT;
+    mode &= ~ENABLE_ECHO_INPUT;
+    mode |= ENABLE_WINDOW_INPUT;
+    SetConsoleMode(tui_state.hIn, mode);
+
+    tui_state.panel        = PANEL_PROCESSES;
+    tui_state.sidebar_idx  = 0;
+    tui_state.focus        = FOCUS_SIDEBAR;
+    tui_state.running      = TRUE;
+
+    memset(&tui_state.target, 0, sizeof(tui_state.target));
+    tui_state.attached = FALSE;
+
+    refresh_process_list();
+
+    return 0;
+}
+
+void tui_run(void)
+{
+    while (tui_state.running) {
+        render();
+        read_input();
+    }
+}
+
+void tui_shutdown(void)
+{
+    CONSOLE_CURSOR_INFO ci = {0};
+    GetConsoleCursorInfo(tui_state.hOut, &ci);
+    ci.bVisible = TRUE;
+    SetConsoleCursorInfo(tui_state.hOut, &ci);
+
+    DWORD mode;
+    GetConsoleMode(tui_state.hIn, &mode);
+    mode |= ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+    SetConsoleMode(tui_state.hIn, mode);
+
+    if (tui_state.attached) {
+        process_detach(&tui_state.target);
+        tui_state.attached = FALSE;
+    }
+
+    if (tui_state.processes) {
+        process_free_list(tui_state.processes);
+        tui_state.processes = NULL;
+    }
+
+    DWORD written;
+    COORD zero = {0, 0};
+    FillConsoleOutputCharacterW(tui_state.hOut, L' ', (DWORD)(tui_state.width * tui_state.height), zero, &written);
+    SetConsoleCursorPosition(tui_state.hOut, zero);
+}
+
+/* ---- Static helpers: screen composition ---- */
 
 static void draw_borders(Screen *screen)
 {
@@ -259,7 +360,7 @@ static void render(void)
     screen_free(&screen);
 }
 
-/* ---- app state + actions ---- */
+/* ---- Static helpers: app state + actions ---- */
 
 static void set_status(const wchar_t *msg, int is_error)
 {
@@ -445,6 +546,8 @@ static void exec_command(void)
     tui_state.cmd_len = 0;
 }
 
+/* ---- Static helpers: input ---- */
+
 static void handle_key(WORD vk, WCHAR ch)
 {
     switch (tui_state.focus) {
@@ -513,85 +616,5 @@ static void read_input(void)
         if (!records[i].Event.KeyEvent.bKeyDown) continue;
         handle_key(records[i].Event.KeyEvent.wVirtualKeyCode,
                    records[i].Event.KeyEvent.uChar.UnicodeChar);
-    }
-}
-
-int tui_init(void)
-{
-    tui_state.hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    tui_state.hIn  = GetStdHandle(STD_INPUT_HANDLE);
-
-    if (tui_state.hOut == INVALID_HANDLE_VALUE || tui_state.hIn == INVALID_HANDLE_VALUE) {
-        return -1;
-    }
-
-    CONSOLE_SCREEN_BUFFER_INFO csbi = {0};
-    if (!GetConsoleScreenBufferInfo(tui_state.hOut, &csbi)) return -1;
-    tui_state.width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-    tui_state.height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-    if (tui_state.width < 80) tui_state.width = 80;
-    if (tui_state.height < 25) tui_state.height = 25;
-
-    CONSOLE_CURSOR_INFO ci = {0};
-    GetConsoleCursorInfo(tui_state.hOut, &ci);
-    ci.bVisible = FALSE;
-    SetConsoleCursorInfo(tui_state.hOut, &ci);
-
-    SetConsoleTitleW(L"MemForge");
-
-    DWORD mode;
-    GetConsoleMode(tui_state.hIn, &mode);
-    mode &= ~ENABLE_PROCESSED_INPUT;
-    mode &= ~ENABLE_LINE_INPUT;
-    mode &= ~ENABLE_ECHO_INPUT;
-    mode |= ENABLE_WINDOW_INPUT;
-    SetConsoleMode(tui_state.hIn, mode);
-
-    tui_state.panel        = PANEL_PROCESSES;
-    tui_state.sidebar_idx  = 0;
-    tui_state.focus        = FOCUS_SIDEBAR;
-    tui_state.running      = TRUE;
-
-    memset(&tui_state.target, 0, sizeof(tui_state.target));
-    tui_state.attached = FALSE;
-
-    refresh_process_list();
-
-    return 0;
-}
-
-void tui_shutdown(void)
-{
-    CONSOLE_CURSOR_INFO ci = {0};
-    GetConsoleCursorInfo(tui_state.hOut, &ci);
-    ci.bVisible = TRUE;
-    SetConsoleCursorInfo(tui_state.hOut, &ci);
-
-    DWORD mode;
-    GetConsoleMode(tui_state.hIn, &mode);
-    mode |= ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
-    SetConsoleMode(tui_state.hIn, mode);
-
-    if (tui_state.attached) {
-        process_detach(&tui_state.target);
-        tui_state.attached = FALSE;
-    }
-
-    if (tui_state.processes) {
-        process_free_list(tui_state.processes);
-        tui_state.processes = NULL;
-    }
-
-    DWORD written;
-    COORD zero = {0, 0};
-    FillConsoleOutputCharacterW(tui_state.hOut, L' ', (DWORD)(tui_state.width * tui_state.height), zero, &written);
-    SetConsoleCursorPosition(tui_state.hOut, zero);
-}
-
-void tui_run(void)
-{
-    while (tui_state.running) {
-        render();
-        read_input();
     }
 }
