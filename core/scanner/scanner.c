@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <threads.h>
 #include "core/scanner/scanner.h"
 
 /* Win32 region/state flags we validate against. Core does not include windows.h
@@ -15,12 +16,32 @@
    paired through this constant. */
 #define SCAN_CHUNK_BYTES 65536
 
+/* First-scan worker thread cap. Each worker scans its contiguous slice of the
+   region list and writes into its own ScanResults; the caller merges. */
+#define SCAN_MAX_THREADS 8
+
+/* One worker's slice of the first scan: its region subset + private result set.
+   Declared up here so the forward declarations below can name it. */
+typedef struct ScanWork {
+    const ScanSession *session;
+    const ScanRegion  *regions;
+    size_t             count;
+    unsigned short     width;
+    int                snapshot;
+    ScanResults        results;
+    PlatformError      err;
+} ScanWork;
+
 /* Forward declarations — definitions at bottom of file. */
-static int scan_results_append(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width);
-static int value_equals(const unsigned char *cur, const ScanValue *p);
-static int numeric_compare(ScanType type, const unsigned char *a, const unsigned char *b);
+static int  scan_results_append(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width);
+static int  value_equals(const unsigned char *cur, const ScanValue *p);
+static int  numeric_compare(ScanType type, const unsigned char *a, const unsigned char *b);
 static void numeric_add(ScanType type, const unsigned char *a, const unsigned char *b, int sign, unsigned char *out);
-static int keep_hit(const ScanSession *session, const unsigned char *current, const unsigned char *prev, size_t width);
+static int  keep_hit(const ScanSession *session, const unsigned char *current, const unsigned char *prev, size_t width);
+static PlatformError scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count,
+                                   unsigned short width, int snapshot, ScanResults *out);
+static int  scan_worker(void *arg);
+static PlatformError merge_worker_results(ScanWork *works, int n, ScanResults *out);
 
 /* ---- Public API (order matches scanner.h) ---- */
 
@@ -117,14 +138,18 @@ PlatformError scanner_first_scan(ScanSession *session)
     if (m == SCAN_MODE_EXACT && width == 0) {
         return PLATFORM_ERR_INVALID_PARAM;   /* no value set */
     }
+    int snapshot = 0;
     if (m == SCAN_MODE_UNKNOWN_INITIAL) {
         width = scan_type_width(session->param.type);
         if (width == 0) {
             return PLATFORM_ERR_INVALID_PARAM;  /* unknown-initial needs a fixed-width numeric type */
         }
+        session->param.width = width;  /* narrowing needs a byte size to re-read with */
+        snapshot = 1;
     }
 
-    scan_results_clear(&session->results);
+    /* A first scan discards any prior result set entirely. */
+    scan_results_free(&session->results);
 
     ScanRegion *regions = NULL;
     size_t region_count = 0;
@@ -133,42 +158,72 @@ PlatformError scanner_first_scan(ScanSession *session)
         return err;
     }
 
-    const size_t W = width;
-    const ScanValue *want = &session->param;
-    int snapshot = (m == SCAN_MODE_UNKNOWN_INITIAL);
+    /* Single-threaded path for small region sets; spawn workers otherwise. */
+    int nthreads = 1;
+    if (region_count >= 4) {
+        nthreads = (int)(region_count < SCAN_MAX_THREADS ? region_count : SCAN_MAX_THREADS);
+    }
 
-    unsigned char buf[SCAN_CHUNK_BYTES];
-    for (size_t r = 0; r < region_count; r++) {
-        unsigned long long addr = regions[r].base;
-        size_t remaining = regions[r].size;
+    if (nthreads == 1) {
+        PlatformError e = scan_regions(session, regions, region_count, width, snapshot, &session->results);
+        scanner_free_regions(regions);
+        if (e != PLATFORM_OK) {
+            return e;
+        }
+        session->has_results = 1;
+        return PLATFORM_OK;
+    }
 
-        while (remaining >= W) {
-            size_t take = remaining < SCAN_CHUNK_BYTES ? remaining : SCAN_CHUNK_BYTES;
-            PlatformError rd = memory_read(session->target, addr, buf, take);
-            if (rd != PLATFORM_OK) {
-                /* Per-region failure: skip the rest of this region, keep scanning
-                   the others. Never paper over with zeros. */
-                break;
-            }
+    ScanWork works[SCAN_MAX_THREADS];
+    thrd_t   tids[SCAN_MAX_THREADS];
+    int      started[SCAN_MAX_THREADS] = {0};
 
-            size_t last = take - W;
-            for (size_t off = 0; off <= last; off++) {
-                if (!snapshot && !value_equals(buf + off, want)) {
-                    continue;
-                }
-                if (!scan_results_append(&session->results, addr + off, buf + off, W)) {
-                    scanner_free_regions(regions);
-                    return PLATFORM_ERR_INTERNAL;
-                }
-            }
+    for (int i = 0; i < nthreads; i++) {
+        size_t start = (size_t)i * region_count / (size_t)nthreads;
+        size_t end   = (size_t)(i + 1) * region_count / (size_t)nthreads;
+        works[i].session  = session;
+        works[i].regions  = regions + start;
+        works[i].count    = end - start;
+        works[i].width    = width;
+        works[i].snapshot = snapshot;
+        works[i].err      = PLATFORM_OK;
+        scan_results_init(&works[i].results);
+    }
 
-            size_t advance = take - W + 1;
-            addr      += advance;
-            remaining -= advance;
+    for (int i = 0; i < nthreads; i++) {
+        if (thrd_create(&tids[i], scan_worker, &works[i]) == thrd_success) {
+            started[i] = 1;
+        } else {
+            /* Couldn't spawn a thread -- run that slice inline so the scan still
+               completes; correctness does not depend on parallelism. */
+            works[i].err = scan_regions(session, works[i].regions, works[i].count,
+                                        works[i].width, works[i].snapshot, &works[i].results);
+        }
+    }
+    for (int i = 0; i < nthreads; i++) {
+        if (started[i]) {
+            int dummy;
+            thrd_join(tids[i], &dummy);
         }
     }
 
+    PlatformError worst = PLATFORM_OK;
+    for (int i = 0; i < nthreads; i++) {
+        if (works[i].err != PLATFORM_OK) {
+            worst = works[i].err;
+        }
+    }
+    if (worst != PLATFORM_OK) {
+        for (int i = 0; i < nthreads; i++) scan_results_free(&works[i].results);
+        scanner_free_regions(regions);
+        return worst;
+    }
+
+    PlatformError me = merge_worker_results(works, nthreads, &session->results);
     scanner_free_regions(regions);
+    if (me != PLATFORM_OK) {
+        return me;
+    }
     session->has_results = 1;
     return PLATFORM_OK;
 }
@@ -415,4 +470,84 @@ static int scan_results_append(ScanResults *results, unsigned long long address,
     memcpy(results->hits[results->count].value, value, width);
     results->count++;
     return 1;
+}
+
+/* Scan a contiguous slice of the region list into `out`. The result array is
+   owned by the caller (init it first). A failed region read skips that region
+   and keeps going; never fakes zeros. */
+static PlatformError scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count,
+                                   unsigned short width, int snapshot, ScanResults *out)
+{
+    const size_t W = width;
+    const ScanValue *want = &session->param;
+    unsigned char buf[SCAN_CHUNK_BYTES];
+
+    for (size_t r = 0; r < count; r++) {
+        unsigned long long addr = regions[r].base;
+        size_t remaining = regions[r].size;
+
+        while (remaining >= W) {
+            size_t take = remaining < SCAN_CHUNK_BYTES ? remaining : SCAN_CHUNK_BYTES;
+            PlatformError rd = memory_read(session->target, addr, buf, take);
+            if (rd != PLATFORM_OK) {
+                break;  /* per-region failure: skip the rest of this region */
+            }
+
+            size_t last = take - W;
+            for (size_t off = 0; off <= last; off++) {
+                if (!snapshot && !value_equals(buf + off, want)) {
+                    continue;
+                }
+                if (!scan_results_append(out, addr + off, buf + off, W)) {
+                    return PLATFORM_ERR_INTERNAL;
+                }
+            }
+
+            size_t advance = take - W + 1;
+            addr      += advance;
+            remaining -= advance;
+        }
+    }
+    return PLATFORM_OK;
+}
+
+static int scan_worker(void *arg)
+{
+    ScanWork *w = (ScanWork *)arg;
+    w->err = scan_regions(w->session, w->regions, w->count, w->width, w->snapshot, &w->results);
+    return 0;
+}
+
+/* Concatenate each worker's hits (in worker order) into a fresh array, freeing
+   the per-worker buffers as we steal them. Caller owns the merged array. */
+static PlatformError merge_worker_results(ScanWork *works, int n, ScanResults *out)
+{
+    size_t total = 0;
+    for (int i = 0; i < n; i++) total += works[i].results.count;
+
+    out->hits     = NULL;
+    out->count    = 0;
+    out->capacity = 0;
+    if (total == 0) {
+        for (int i = 0; i < n; i++) scan_results_free(&works[i].results);
+        return PLATFORM_OK;
+    }
+
+    out->hits = (ScanHit *)malloc(total * sizeof(ScanHit));
+    if (!out->hits) {
+        for (int i = 0; i < n; i++) scan_results_free(&works[i].results);
+        return PLATFORM_ERR_INTERNAL;
+    }
+    out->capacity = total;
+
+    ScanHit *p = out->hits;
+    for (int i = 0; i < n; i++) {
+        if (works[i].results.count) {
+            memcpy(p, works[i].results.hits, works[i].results.count * sizeof(ScanHit));
+            p += works[i].results.count;
+        }
+        scan_results_free(&works[i].results);
+    }
+    out->count = total;
+    return PLATFORM_OK;
 }
