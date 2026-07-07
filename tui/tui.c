@@ -9,6 +9,7 @@
 #include "tui/render.h"
 #include "core/process/process.h"
 #include "core/memory/memory.h"
+#include "core/scanner/scanner.h"
 
 #define SIDEBAR_WIDTH   12
 #define HEADER_ROW      1
@@ -31,10 +32,13 @@
 #define CMD_ATTACH_PREFIX 7  /* length of L"attach " */
 #define CMD_READ_PREFIX   5  /* length of L"read "   */
 #define CMD_WRITE_PREFIX  6  /* length of L"write "  */
+#define CMD_SCAN_PREFIX   5  /* length of L"scan "   */
+#define CMD_NEXT_PREFIX   5  /* length of L"next "   */
 
 #define CMD_BUF_MAX    256
 #define STATUS_MSG_MAX 512
 #define INPUT_RECORD_BATCH 16
+#define SCANNER_LIST_ROWS 20  /* max result addresses drawn in the scanner panel */
 
 enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
 enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
@@ -80,6 +84,9 @@ static struct {
     Target  target;
     int     attached;
 
+    ScanSession scanner;
+    int         scanner_inited;
+
     wchar_t cmd_buf[CMD_BUF_MAX];
     int     cmd_len;
 
@@ -96,6 +103,7 @@ static void draw_sep_row(Screen *screen, int y, int split);
 static void draw_header(Screen *screen);
 static void draw_sidebar(Screen *screen);
 static void draw_process_list(Screen *screen);
+static void draw_scanner_panel(Screen *screen);
 static void draw_main_panel(Screen *screen);
 static void draw_command(Screen *screen);
 static void render(void);
@@ -105,6 +113,9 @@ static int  do_attach(DWORD pid);
 static void attach_to_selected(void);
 static void cmd_read(const wchar_t *args);
 static void cmd_write(const wchar_t *args);
+static void cmd_scan(const wchar_t *args);
+static void cmd_next(const wchar_t *args);
+static void cmd_scanclear(void);
 static void exec_command(void);
 static void handle_key(WORD vk, WCHAR ch);
 static void read_input(void);
@@ -149,6 +160,7 @@ int tui_init(void)
 
     memset(&tui_state.target, 0, sizeof(tui_state.target));
     tui_state.attached = FALSE;
+    tui_state.scanner_inited = FALSE;
 
     refresh_process_list();
 
@@ -176,6 +188,10 @@ void tui_shutdown(void)
     SetConsoleMode(tui_state.hIn, mode);
 
     if (tui_state.attached) {
+        if (tui_state.scanner_inited) {
+            scanner_session_destroy(&tui_state.scanner);
+            tui_state.scanner_inited = FALSE;
+        }
         process_detach(&tui_state.target);
         tui_state.attached = FALSE;
     }
@@ -312,8 +328,58 @@ static void draw_main_panel(Screen *screen)
         } else {
             screen_text(screen, main_x, CONTENT_START, L"Loading process list...", s_attr_normal);
         }
+    } else if (tui_state.panel == PANEL_SCANNER) {
+        draw_scanner_panel(screen);
     } else {
         screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", s_attr_normal);
+    }
+}
+
+static void draw_scanner_panel(Screen *screen)
+{
+    int sb_end = 1 + SIDEBAR_WIDTH;
+    int main_x = sb_end + 1;
+
+    if (!tui_state.attached) {
+        screen_text(screen, main_x, CONTENT_START, L"Attach to a process first (Processes panel, or `attach <pid>`)", s_attr_normal);
+        return;
+    }
+
+    wchar_t line[128];
+    int row = CONTENT_START;
+
+    swprintf_s(line, _countof(line), L"Scanner — type: i32  mode: exact");
+    screen_text(screen, main_x, row++, line, s_attr_normal);
+
+    swprintf_s(line, _countof(line), L"value: %d   results: %llu",
+               tui_state.scanner.value_i32,
+               (unsigned long long)tui_state.scanner.results.count);
+    screen_text(screen, main_x, row++, line, s_attr_normal);
+
+    row++;  /* blank separator */
+
+    if (!tui_state.scanner.has_results) {
+        screen_text(screen, main_x, row, L"Run `scan <int>` to find a value", s_attr_normal);
+    } else if (tui_state.scanner.results.count == 0) {
+        screen_text(screen, main_x, row, L"No survivors — try a different value or `scanclear`", s_attr_error);
+    } else {
+        wchar_t addrs[128];
+        for (size_t i = 0; i < tui_state.scanner.results.count && i < SCANNER_LIST_ROWS; i++) {
+            ScanHit *hit = &tui_state.scanner.results.hits[i];
+            int v = (int)(hit->value[0] | (hit->value[1] << 8) | (hit->value[2] << 16) | (hit->value[3] << 24));
+            swprintf_s(addrs, _countof(addrs), L"  0x%016llX  %d", hit->address, v);
+            screen_text(screen, main_x, row++, addrs, s_attr_normal);
+        }
+        if (tui_state.scanner.results.count > SCANNER_LIST_ROWS) {
+            swprintf_s(addrs, _countof(addrs), L"  ... (%llu more)",
+                       (unsigned long long)(tui_state.scanner.results.count - SCANNER_LIST_ROWS));
+            screen_text(screen, main_x, row++, addrs, s_attr_border);
+        }
+    }
+
+    int help_row = tui_state.height - 4;
+    if (help_row > row) {
+        screen_text(screen, main_x, help_row, L"commands: scan <int>   next <int>   scanclear", s_attr_border);
     }
 }
 
@@ -385,6 +451,10 @@ static void refresh_process_list(void)
 static int do_attach(DWORD pid)
 {
     if (tui_state.attached) {
+        if (tui_state.scanner_inited) {
+            scanner_session_destroy(&tui_state.scanner);
+            tui_state.scanner_inited = FALSE;
+        }
         process_detach(&tui_state.target);
         tui_state.attached = FALSE;
     }
@@ -400,6 +470,8 @@ static int do_attach(DWORD pid)
     }
 
     tui_state.attached = TRUE;
+    scanner_session_init(&tui_state.scanner, &tui_state.target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
+    tui_state.scanner_inited = TRUE;
     wchar_t msg[PROCESS_NAME_MAX + 32];
     swprintf_s(msg, _countof(msg), L"Attached to %s (PID %u)", tui_state.target.name, pid);
     set_status(msg, FALSE);
@@ -492,6 +564,73 @@ static void cmd_write(const wchar_t *args)
     set_status(msg, FALSE);
 }
 
+static void cmd_scan(const wchar_t *args)
+{
+    if (!tui_state.attached || !tui_state.scanner_inited) {
+        set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    int value = 0;
+    if (swscanf_s(args, L"%d", &value) != 1) {
+        set_status(L"usage: scan <int32>  (i32/exact for now)", TRUE);
+        return;
+    }
+
+    tui_state.scanner.value_i32 = value;
+    PlatformError err = scanner_first_scan(&tui_state.scanner);
+    if (err != PLATFORM_OK) {
+        wchar_t msg[256];
+        swprintf_s(msg, _countof(msg), L"first scan failed: %S", process_error_string(err));
+        set_status(msg, TRUE);
+        return;
+    }
+
+    wchar_t msg[128];
+    swprintf_s(msg, _countof(msg), L"First scan: %llu matches for %d", (unsigned long long)tui_state.scanner.results.count, value);
+    set_status(msg, FALSE);
+}
+
+static void cmd_next(const wchar_t *args)
+{
+    if (!tui_state.attached || !tui_state.scanner_inited) {
+        set_status(L"No process attached", TRUE);
+        return;
+    }
+    if (!tui_state.scanner.has_results) {
+        set_status(L"Run `scan <value>` first", TRUE);
+        return;
+    }
+
+    int value = 0;
+    if (swscanf_s(args, L"%d", &value) != 1) {
+        set_status(L"usage: next <int32>  (keeps addresses now equal to <value>)", TRUE);
+        return;
+    }
+
+    tui_state.scanner.value_i32 = value;
+    PlatformError err = scanner_next_scan(&tui_state.scanner);
+    if (err != PLATFORM_OK) {
+        wchar_t msg[256];
+        swprintf_s(msg, _countof(msg), L"next scan failed: %S", process_error_string(err));
+        set_status(msg, TRUE);
+        return;
+    }
+
+    wchar_t msg[128];
+    swprintf_s(msg, _countof(msg), L"Next scan: %llu survivors", (unsigned long long)tui_state.scanner.results.count);
+    set_status(msg, FALSE);
+}
+
+static void cmd_scanclear(void)
+{
+    if (!tui_state.scanner_inited) return;
+    scan_results_clear(&tui_state.scanner.results);
+    tui_state.scanner.has_results = 0;
+    tui_state.scanner.value_i32 = 0;
+    set_status(L"Scanner cleared", FALSE);
+}
+
 static void exec_command(void)
 {
     if (tui_state.cmd_len == 0) return;
@@ -533,6 +672,24 @@ static void exec_command(void)
 
     if (wcsncmp(tui_state.cmd_buf, L"write ", CMD_WRITE_PREFIX) == 0) {
         cmd_write(tui_state.cmd_buf + CMD_WRITE_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"scan ", CMD_SCAN_PREFIX) == 0) {
+        cmd_scan(tui_state.cmd_buf + CMD_SCAN_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"next ", CMD_NEXT_PREFIX) == 0) {
+        cmd_next(tui_state.cmd_buf + CMD_NEXT_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcscmp(tui_state.cmd_buf, L"scanclear") == 0) {
+        cmd_scanclear();
         tui_state.cmd_len = 0;
         return;
     }
