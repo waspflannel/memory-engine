@@ -16,6 +16,7 @@
 
 /* Forward declarations — definitions at bottom of file. */
 static int scan_results_append(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width);
+static int value_equals(const unsigned char *cur, const ScanValue *p);
 
 /* ---- Public API (order matches scanner.h) ---- */
 
@@ -42,15 +43,50 @@ void scan_results_clear(ScanResults *results)
     results->count = 0;
 }
 
+unsigned short scan_type_width(ScanType type)
+{
+    switch (type) {
+    case SCAN_TYPE_I8:
+    case SCAN_TYPE_U8:        return 1;
+    case SCAN_TYPE_I16:
+    case SCAN_TYPE_U16:       return 2;
+    case SCAN_TYPE_I32:
+    case SCAN_TYPE_U32:
+    case SCAN_TYPE_F32:       return 4;
+    case SCAN_TYPE_I64:
+    case SCAN_TYPE_U64:
+    case SCAN_TYPE_F64:       return 8;
+    default:                  return 0;   /* SCAN_TYPE_STRING / SCAN_TYPE_AOB: variable */
+    }
+}
+
+void scanner_value_set(ScanValue *value, ScanType type, const void *bytes, size_t len)
+{
+    if (!value) return;
+    value->type = type;
+    unsigned short w = scan_type_width(type);
+    value->width = w ? w : (unsigned short)(len > SCAN_VALUE_MAX ? SCAN_VALUE_MAX : len);
+    if (bytes && value->width) {
+        memcpy(value->bytes, bytes, value->width);
+    }
+    memset(value->wild, 0, sizeof(value->wild));
+}
+
+void scanner_value_set_wildcard(ScanValue *value, const unsigned char *wild, size_t len)
+{
+    if (!value || !wild) return;
+    size_t n = len > SCAN_VALUE_MAX ? SCAN_VALUE_MAX : len;
+    memcpy(value->wild, wild, n);
+}
+
 void scanner_session_init(ScanSession *session, const Target *target, ScanType type, ScanMode mode)
 {
     if (!session) return;
-    session->target      = target;
-    session->type         = type;
-    session->mode         = mode;
-    session->value_i32    = 0;
+    session->target = target;
+    session->mode   = mode;
+    scanner_value_set(&session->param, type, NULL, 0);
     scan_results_init(&session->results);
-    session->has_results  = 0;
+    session->has_results = 0;
 }
 
 void scanner_session_destroy(ScanSession *session)
@@ -65,9 +101,12 @@ PlatformError scanner_first_scan(ScanSession *session)
     if (!session || !session->target || !session->target->handle) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
-    /* Only the i32/exact slice is implemented yet (phase-2 build order). */
-    if (session->type != SCAN_TYPE_I32 || session->mode != SCAN_MODE_EXACT) {
+    /* Only the exact slice is implemented yet (phase-2 build order). */
+    if (session->mode != SCAN_MODE_EXACT) {
         return PLATFORM_ERR_INVALID_PARAM;
+    }
+    if (session->param.width == 0) {
+        return PLATFORM_ERR_INVALID_PARAM;   /* no value set */
     }
 
     scan_results_clear(&session->results);
@@ -79,13 +118,8 @@ PlatformError scanner_first_scan(ScanSession *session)
         return err;
     }
 
-    const unsigned int W = 4;
-    unsigned char want[4];
-    int value = session->value_i32;
-    want[0] = (unsigned char)(value & 0xFF);
-    want[1] = (unsigned char)((value >> 8) & 0xFF);
-    want[2] = (unsigned char)((value >> 16) & 0xFF);
-    want[3] = (unsigned char)((value >> 24) & 0xFF);
+    const size_t W = session->param.width;
+    const ScanValue *want = &session->param;
 
     unsigned char buf[SCAN_CHUNK_BYTES];
     for (size_t r = 0; r < region_count; r++) {
@@ -103,11 +137,7 @@ PlatformError scanner_first_scan(ScanSession *session)
 
             size_t last = take - W;
             for (size_t off = 0; off <= last; off++) {
-                /* Short-circuit on the first byte before the full 4-byte compare. */
-                if (buf[off] == want[0] &&
-                    buf[off + 1] == want[1] &&
-                    buf[off + 2] == want[2] &&
-                    buf[off + 3] == want[3]) {
+                if (value_equals(buf + off, want)) {
                     if (!scan_results_append(&session->results, addr + off, buf + off, W)) {
                         scanner_free_regions(regions);
                         return PLATFORM_ERR_INTERNAL;
@@ -134,28 +164,26 @@ PlatformError scanner_next_scan(ScanSession *session)
     if (!session->has_results) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
-    if (session->type != SCAN_TYPE_I32 || session->mode != SCAN_MODE_EXACT) {
+    if (session->mode != SCAN_MODE_EXACT) {
+        return PLATFORM_ERR_INVALID_PARAM;
+    }
+    if (session->param.width == 0) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
-    const unsigned int W = 4;
-    unsigned char want[4];
-    int value = session->value_i32;
-    want[0] = (unsigned char)(value & 0xFF);
-    want[1] = (unsigned char)((value >> 8) & 0xFF);
-    want[2] = (unsigned char)((value >> 16) & 0xFF);
-    want[3] = (unsigned char)((value >> 24) & 0xFF);
+    const size_t W = session->param.width;
+    const ScanValue *want = &session->param;
 
     ScanHit *hits = session->results.hits;
     size_t survivors = 0;
+    unsigned char cur[SCAN_VALUE_MAX];
     for (size_t i = 0; i < session->results.count; i++) {
-        unsigned char cur[4];
         PlatformError rd = memory_read(session->target, hits[i].address, cur, W);
         if (rd != PLATFORM_OK) {
             /* Target dropped this page since the first scan; drop the hit, don't fake. */
             continue;
         }
-        if (cur[0] == want[0] && cur[1] == want[1] && cur[2] == want[2] && cur[3] == want[3]) {
+        if (value_equals(cur, want)) {
             /* In-place compact: survivors <= i, so reads of hits[i] stay safe. */
             hits[survivors].address = hits[i].address;
             memcpy(hits[survivors].value, cur, W);
@@ -233,6 +261,21 @@ void scanner_free_regions(ScanRegion *regions)
 }
 
 /* ---- Static helpers ---- */
+
+static int value_equals(const unsigned char *cur, const ScanValue *p)
+{
+    /* Fast-path the common case: a literal first byte rejects the vast majority
+       of offsets before we ever look at the rest. `??` (mask=1) skips the byte. */
+    if (!p->wild[0] && cur[0] != p->bytes[0]) {
+        return 0;
+    }
+    for (unsigned short i = 0; i < p->width; i++) {
+        if (!p->wild[i] && cur[i] != p->bytes[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 static int scan_results_append(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width)
 {

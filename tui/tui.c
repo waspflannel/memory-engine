@@ -86,6 +86,7 @@ static struct {
 
     ScanSession scanner;
     int         scanner_inited;
+    int         string_enc;       /* SCAN_TYPE_STRING encoding: 0 = ASCII, 1 = UTF-16LE */
 
     wchar_t cmd_buf[CMD_BUF_MAX];
     int     cmd_len;
@@ -116,6 +117,12 @@ static void cmd_write(const wchar_t *args);
 static void cmd_scan(const wchar_t *args);
 static void cmd_next(const wchar_t *args);
 static void cmd_scanclear(void);
+static void cmd_type(const wchar_t *args);
+static void cmd_strenc(const wchar_t *args);
+static int  parse_scan_value(const wchar_t *args, ScanValue *out);
+static int  parse_aob_value(const wchar_t *args, ScanValue *out);
+static int  parse_string_value(const wchar_t *args, ScanValue *out);
+static const wchar_t *scan_type_name(ScanType type);
 static void exec_command(void);
 static void handle_key(WORD vk, WCHAR ch);
 static void read_input(void);
@@ -161,6 +168,7 @@ int tui_init(void)
     memset(&tui_state.target, 0, sizeof(tui_state.target));
     tui_state.attached = FALSE;
     tui_state.scanner_inited = FALSE;
+    tui_state.string_enc = 0;
 
     refresh_process_list();
 
@@ -345,41 +353,65 @@ static void draw_scanner_panel(Screen *screen)
         return;
     }
 
-    wchar_t line[128];
+    ScanSession *s = &tui_state.scanner;
+    wchar_t line[160];
     int row = CONTENT_START;
 
-    swprintf_s(line, _countof(line), L"Scanner — type: i32  mode: exact");
+    const wchar_t *enc = s->param.type == SCAN_TYPE_STRING
+        ? (tui_state.string_enc == 1 ? L"utf16" : L"ascii") : L"-";
+    swprintf_s(line, _countof(line), L"Scanner -- type: %s  mode: exact  enc: %s",
+               scan_type_name(s->param.type), enc);
     screen_text(screen, main_x, row++, line, s_attr_normal);
 
-    swprintf_s(line, _countof(line), L"value: %d   results: %llu",
-               tui_state.scanner.value_i32,
-               (unsigned long long)tui_state.scanner.results.count);
+    /* Hex byte dump of the current param (works for every type). */
+    wchar_t hex[160];
+    int pos = swprintf_s(hex, _countof(hex), L"value(hex): ");
+    unsigned short shown = s->param.width > 16 ? 16 : s->param.width;
+    for (unsigned short i = 0; i < shown && pos + 4 < (int)_countof(hex); i++) {
+        if (s->param.wild[i]) {
+            pos += swprintf_s(hex + pos, _countof(hex) - pos, L"?? ");
+        } else {
+            pos += swprintf_s(hex + pos, _countof(hex) - pos, L"%02X ", s->param.bytes[i]);
+        }
+    }
+    if (s->param.width > 16) {
+        pos += swprintf_s(hex + pos, _countof(hex) - pos, L"...");
+    }
+    swprintf_s(line, _countof(line), L"%s  results: %llu", hex, (unsigned long long)s->results.count);
     screen_text(screen, main_x, row++, line, s_attr_normal);
 
     row++;  /* blank separator */
 
-    if (!tui_state.scanner.has_results) {
-        screen_text(screen, main_x, row, L"Run `scan <int>` to find a value", s_attr_normal);
-    } else if (tui_state.scanner.results.count == 0) {
-        screen_text(screen, main_x, row, L"No survivors — try a different value or `scanclear`", s_attr_error);
+    if (!s->has_results) {
+        screen_text(screen, main_x, row, L"Run `scan <value>` to find (use `type <name>` to pick type)", s_attr_normal);
+    } else if (s->results.count == 0) {
+        screen_text(screen, main_x, row, L"No survivors -- try a different value or `scanclear`", s_attr_error);
     } else {
-        wchar_t addrs[128];
-        for (size_t i = 0; i < tui_state.scanner.results.count && i < SCANNER_LIST_ROWS; i++) {
-            ScanHit *hit = &tui_state.scanner.results.hits[i];
-            int v = (int)(hit->value[0] | (hit->value[1] << 8) | (hit->value[2] << 16) | (hit->value[3] << 24));
-            swprintf_s(addrs, _countof(addrs), L"  0x%016llX  %d", hit->address, v);
+        wchar_t addrs[160];
+        for (size_t i = 0; i < s->results.count && i < SCANNER_LIST_ROWS; i++) {
+            ScanHit *hit = &s->results.hits[i];
+            int p = swprintf_s(addrs, _countof(addrs), L"  0x%016llX  ", hit->address);
+            unsigned short w = s->param.width > 16 ? 16 : s->param.width;
+            for (unsigned short k = 0; k < w && p + 4 < (int)_countof(addrs); k++) {
+                p += swprintf_s(addrs + p, _countof(addrs) - p, L"%02X ", hit->value[k]);
+            }
+            if (s->param.width > 16) {
+                p += swprintf_s(addrs + p, _countof(addrs) - p, L"...");
+            }
             screen_text(screen, main_x, row++, addrs, s_attr_normal);
         }
-        if (tui_state.scanner.results.count > SCANNER_LIST_ROWS) {
+        if (s->results.count > SCANNER_LIST_ROWS) {
             swprintf_s(addrs, _countof(addrs), L"  ... (%llu more)",
-                       (unsigned long long)(tui_state.scanner.results.count - SCANNER_LIST_ROWS));
+                       (unsigned long long)(s->results.count - SCANNER_LIST_ROWS));
             screen_text(screen, main_x, row++, addrs, s_attr_border);
         }
     }
 
     int help_row = tui_state.height - 4;
     if (help_row > row) {
-        screen_text(screen, main_x, help_row, L"commands: scan <int>   next <int>   scanclear", s_attr_border);
+        screen_text(screen, main_x, help_row,
+                    L"commands: type <name>  scan <value>  next <value>  scanclear  strenc ascii|utf16",
+                    s_attr_border);
     }
 }
 
@@ -571,13 +603,11 @@ static void cmd_scan(const wchar_t *args)
         return;
     }
 
-    int value = 0;
-    if (swscanf_s(args, L"%d", &value) != 1) {
-        set_status(L"usage: scan <int32>  (i32/exact for now)", TRUE);
+    if (!parse_scan_value(args, &tui_state.scanner.param)) {
+        set_status(L"usage: scan <value>  (could not parse for current type)", TRUE);
         return;
     }
 
-    tui_state.scanner.value_i32 = value;
     PlatformError err = scanner_first_scan(&tui_state.scanner);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
@@ -587,7 +617,7 @@ static void cmd_scan(const wchar_t *args)
     }
 
     wchar_t msg[128];
-    swprintf_s(msg, _countof(msg), L"First scan: %llu matches for %d", (unsigned long long)tui_state.scanner.results.count, value);
+    swprintf_s(msg, _countof(msg), L"First scan: %llu matches", (unsigned long long)tui_state.scanner.results.count);
     set_status(msg, FALSE);
 }
 
@@ -602,13 +632,11 @@ static void cmd_next(const wchar_t *args)
         return;
     }
 
-    int value = 0;
-    if (swscanf_s(args, L"%d", &value) != 1) {
-        set_status(L"usage: next <int32>  (keeps addresses now equal to <value>)", TRUE);
+    if (!parse_scan_value(args, &tui_state.scanner.param)) {
+        set_status(L"usage: next <value>  (could not parse for current type)", TRUE);
         return;
     }
 
-    tui_state.scanner.value_i32 = value;
     PlatformError err = scanner_next_scan(&tui_state.scanner);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
@@ -627,8 +655,54 @@ static void cmd_scanclear(void)
     if (!tui_state.scanner_inited) return;
     scan_results_clear(&tui_state.scanner.results);
     tui_state.scanner.has_results = 0;
-    tui_state.scanner.value_i32 = 0;
     set_status(L"Scanner cleared", FALSE);
+}
+
+static void cmd_type(const wchar_t *args)
+{
+    if (!tui_state.attached || !tui_state.scanner_inited) {
+        set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    ScanType type;
+    if (wcscmp(args, L"i32") == 0)         type = SCAN_TYPE_I32;
+    else if (wcscmp(args, L"i8") == 0)     type = SCAN_TYPE_I8;
+    else if (wcscmp(args, L"i16") == 0)    type = SCAN_TYPE_I16;
+    else if (wcscmp(args, L"i64") == 0)    type = SCAN_TYPE_I64;
+    else if (wcscmp(args, L"u8") == 0)     type = SCAN_TYPE_U8;
+    else if (wcscmp(args, L"u16") == 0)    type = SCAN_TYPE_U16;
+    else if (wcscmp(args, L"u32") == 0)    type = SCAN_TYPE_U32;
+    else if (wcscmp(args, L"u64") == 0)    type = SCAN_TYPE_U64;
+    else if (wcscmp(args, L"f32") == 0)    type = SCAN_TYPE_F32;
+    else if (wcscmp(args, L"f64") == 0)    type = SCAN_TYPE_F64;
+    else if (wcscmp(args, L"string") == 0) type = SCAN_TYPE_STRING;
+    else if (wcscmp(args, L"aob") == 0)    type = SCAN_TYPE_AOB;
+    else {
+        set_status(L"usage: type i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|aob", TRUE);
+        return;
+    }
+
+    /* Re-init the session (drops any prior result set) but keep the same mode.
+       The borrowed target pointer is the same field in tui_state, so keep it. */
+    scanner_session_init(&tui_state.scanner, &tui_state.target, type, SCAN_MODE_EXACT);
+
+    wchar_t msg[64];
+    swprintf_s(msg, _countof(msg), L"Type: %s", scan_type_name(type));
+    set_status(msg, FALSE);
+}
+
+static void cmd_strenc(const wchar_t *args)
+{
+    if (wcscmp(args, L"ascii") == 0) {
+        tui_state.string_enc = 0;
+        set_status(L"String encoding: ASCII", FALSE);
+    } else if (wcscmp(args, L"utf16") == 0) {
+        tui_state.string_enc = 1;
+        set_status(L"String encoding: UTF-16LE", FALSE);
+    } else {
+        set_status(L"usage: strenc ascii|utf16", TRUE);
+    }
 }
 
 static void exec_command(void)
@@ -690,6 +764,18 @@ static void exec_command(void)
 
     if (wcscmp(tui_state.cmd_buf, L"scanclear") == 0) {
         cmd_scanclear();
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"type ", 5) == 0) {
+        cmd_type(tui_state.cmd_buf + 5);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"strenc ", 7) == 0) {
+        cmd_strenc(tui_state.cmd_buf + 7);
         tui_state.cmd_len = 0;
         return;
     }
@@ -770,5 +856,152 @@ static void read_input(void)
         if (!records[i].Event.KeyEvent.bKeyDown) continue;
         handle_key(records[i].Event.KeyEvent.wVirtualKeyCode,
                    records[i].Event.KeyEvent.uChar.UnicodeChar);
+    }
+}
+
+/* ---- Static helpers: scan value parsing ---- */
+
+static const wchar_t *scan_type_name(ScanType type)
+{
+    switch (type) {
+    case SCAN_TYPE_I32:    return L"i32";
+    case SCAN_TYPE_I8:     return L"i8";
+    case SCAN_TYPE_I16:    return L"i16";
+    case SCAN_TYPE_I64:    return L"i64";
+    case SCAN_TYPE_U8:     return L"u8";
+    case SCAN_TYPE_U16:    return L"u16";
+    case SCAN_TYPE_U32:    return L"u32";
+    case SCAN_TYPE_U64:    return L"u64";
+    case SCAN_TYPE_F32:    return L"f32";
+    case SCAN_TYPE_F64:    return L"f64";
+    case SCAN_TYPE_STRING: return L"string";
+    case SCAN_TYPE_AOB:    return L"aob";
+    default:               return L"?";
+    }
+}
+
+static int is_hex_wchar(wchar_t c)
+{
+    return (c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F') || (c >= L'a' && c <= L'f');
+}
+
+static int hex_wchar_value(wchar_t c)
+{
+    if (c >= L'0' && c <= L'9') return (int)(c - L'0');
+    if (c >= L'A' && c <= L'F') return (int)(c - L'A') + 10;
+    return (int)(c - L'a') + 10;
+}
+
+static int parse_aob_value(const wchar_t *args, ScanValue *out)
+{
+    unsigned char bytes[SCAN_VALUE_MAX];
+    unsigned char wild[SCAN_VALUE_MAX];
+    size_t n = 0;
+
+    const wchar_t *p = args;
+    while (*p) {
+        while (*p == L' ' || *p == L'\t') p++;
+        if (!*p) break;
+
+        if (n >= SCAN_VALUE_MAX) return 0;
+
+        if (p[0] == L'?' && p[1] == L'?') {
+            wild[n] = 1;
+            bytes[n] = 0;
+            n++;
+            p += 2;
+        } else if (is_hex_wchar(p[0]) && is_hex_wchar(p[1])) {
+            wild[n] = 0;
+            bytes[n] = (unsigned char)((hex_wchar_value(p[0]) << 4) | hex_wchar_value(p[1]));
+            n++;
+            p += 2;
+        } else {
+            return 0;   /* malformed token */
+        }
+    }
+
+    if (n == 0) return 0;
+
+    scanner_value_set(out, SCAN_TYPE_AOB, bytes, n);
+    scanner_value_set_wildcard(out, wild, n);
+    return 1;
+}
+
+static int parse_string_value(const wchar_t *args, ScanValue *out)
+{
+    size_t len = wcslen(args);
+    if (len == 0) return 0;
+
+    unsigned char bytes[SCAN_VALUE_MAX * 2];
+    size_t n = 0;
+
+    if (tui_state.string_enc == 1) {
+        if (len > SCAN_VALUE_MAX / 2) return 0;
+        for (size_t i = 0; i < len; i++) {
+            bytes[n++] = (unsigned char)(args[i] & 0xFF);
+            bytes[n++] = (unsigned char)((args[i] >> 8) & 0xFF);
+        }
+    } else {
+        if (len > SCAN_VALUE_MAX) return 0;
+        for (size_t i = 0; i < len; i++) {
+            if (args[i] >= 128) return 0;   /* non-ASCII rejected in ASCII mode */
+            bytes[n++] = (unsigned char)args[i];
+        }
+    }
+
+    scanner_value_set(out, SCAN_TYPE_STRING, bytes, n);
+    return 1;
+}
+
+static int parse_scan_value(const wchar_t *args, ScanValue *out)
+{
+    switch (out->type) {
+    case SCAN_TYPE_I8:
+    case SCAN_TYPE_I16:
+    case SCAN_TYPE_I32: {
+        int x = 0;
+        if (swscanf_s(args, L"%d", &x) != 1) return 0;
+        if (out->type == SCAN_TYPE_I8)  { signed char t = (signed char)x;  scanner_value_set(out, out->type, &t, 1); }
+        else if (out->type == SCAN_TYPE_I16) { short t = (short)x;        scanner_value_set(out, out->type, &t, 2); }
+        else                                { int t = x;                    scanner_value_set(out, out->type, &t, 4); }
+        return 1;
+    }
+    case SCAN_TYPE_I64: {
+        long long x = 0;
+        if (swscanf_s(args, L"%lld", &x) != 1) return 0;
+        scanner_value_set(out, out->type, &x, sizeof(x));
+        return 1;
+    }
+    case SCAN_TYPE_U8:
+    case SCAN_TYPE_U16:
+    case SCAN_TYPE_U32: {
+        unsigned int x = 0;
+        if (swscanf_s(args, L"%u", &x) != 1) return 0;
+        if (out->type == SCAN_TYPE_U8) { unsigned char t = (unsigned char)x;  scanner_value_set(out, out->type, &t, 1); }
+        else if (out->type == SCAN_TYPE_U16) { unsigned short t = (unsigned short)x; scanner_value_set(out, out->type, &t, 2); }
+        else                                { unsigned int t = x;             scanner_value_set(out, out->type, &t, 4); }
+        return 1;
+    }
+    case SCAN_TYPE_U64: {
+        unsigned long long x = 0;
+        if (swscanf_s(args, L"%llu", &x) != 1) return 0;
+        scanner_value_set(out, out->type, &x, sizeof(x));
+        return 1;
+    }
+    case SCAN_TYPE_F32: {
+        float x = 0.0f;
+        if (swscanf_s(args, L"%f", &x) != 1) return 0;
+        scanner_value_set(out, out->type, &x, sizeof(x));
+        return 1;
+    }
+    case SCAN_TYPE_F64: {
+        double x = 0.0;
+        if (swscanf_s(args, L"%lf", &x) != 1) return 0;
+        scanner_value_set(out, out->type, &x, sizeof(x));
+        return 1;
+    }
+    case SCAN_TYPE_STRING: return parse_string_value(args, out);
+    case SCAN_TYPE_AOB:    return parse_aob_value(args, out);
+    default:               return 0;
     }
 }

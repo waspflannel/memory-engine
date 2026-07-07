@@ -53,21 +53,50 @@ void          scanner_free_regions(ScanRegion *regions);
    slots. */
 
 typedef enum {
-    SCAN_TYPE_I32,
+    SCAN_TYPE_I32,   /* first slice (kept first so existing dispatch stays readable) */
+    SCAN_TYPE_I8,
+    SCAN_TYPE_I16,
+    SCAN_TYPE_I64,
+    SCAN_TYPE_U8,
+    SCAN_TYPE_U16,
+    SCAN_TYPE_U32,
+    SCAN_TYPE_U64,
+    SCAN_TYPE_F32,
+    SCAN_TYPE_F64,
+    SCAN_TYPE_STRING,
+    SCAN_TYPE_AOB,
 } ScanType;
 
 typedef enum {
     SCAN_MODE_EXACT,
 } ScanMode;
 
+/*
+ * The value the scan compares against, expressed as raw bytes plus a per-byte
+ * wildcard mask. For numeric/string types the mask is all-zero (strict compare);
+ * for AOB a `??` position sets that byte's mask to 1 and the match ignores it.
+ * Integers are stored in the host's little-endian byte order (we compare raw
+ * bytes against bytes read from the target, which are also LE on x86/x64).
+ */
+typedef struct {
+    ScanType       type;
+    unsigned short width;                       /* bytes compared per hit */
+    unsigned char  bytes[SCAN_VALUE_MAX];       /* literal pattern bytes */
+    unsigned char  wild[SCAN_VALUE_MAX];        /* 1 = ?? (AOB), 0 = literal */
+} ScanValue;
+
 typedef struct {
     const Target *target;   /* borrowed, not owned */
-    ScanType      type;
     ScanMode      mode;
-    int           value_i32;          /* exact-value param for SCAN_TYPE_I32 / SCAN_MODE_EXACT */
+    ScanValue     param;        /* exact value / first operand */
     ScanResults   results;
     int           has_results;        /* set after first scan; next scan requires it */
 } ScanSession;
+
+unsigned short scan_type_width(ScanType type);     /* fixed width, or 0 for variable (string/AOB) */
+
+void scanner_value_set(ScanValue *value, ScanType type, const void *bytes, size_t len);
+void scanner_value_set_wildcard(ScanValue *value, const unsigned char *wild, size_t len);
 
 void           scanner_session_init(ScanSession *session, const Target *target, ScanType type, ScanMode mode);
 void           scanner_session_destroy(ScanSession *session);
