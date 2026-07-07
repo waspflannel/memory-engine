@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#define PLATFORM_NAME_MAX 260
+
 typedef enum {
     PLATFORM_OK = 0,
     PLATFORM_ERR_ACCESS_DENIED,
@@ -21,7 +23,7 @@ typedef enum {
 
 typedef struct {
     unsigned int  pid;
-    wchar_t       name[260];
+    wchar_t       name[PLATFORM_NAME_MAX];
 } PlatformProcessEntry;
 
 typedef struct {
@@ -35,13 +37,13 @@ typedef struct {
 typedef struct {
     unsigned long long base;
     size_t             size;
-    wchar_t            name[260];
+    wchar_t            name[PLATFORM_NAME_MAX];
 } PlatformModuleInfo;
 
 PlatformError  platform_list_processes(PlatformProcessEntry **entries, unsigned int *count);
 void           platform_free_process_list(PlatformProcessEntry *entries);
 
-PlatformError  platform_open_process(unsigned int pid, void **handle);
+PlatformError  platform_open_process(unsigned int pid, void **out_handle);
 void           platform_close_handle(void *handle);
 
 PlatformError  platform_read_memory(void *handle, unsigned long long address, void *buffer, size_t size, size_t *bytes_read);
@@ -52,8 +54,5 @@ PlatformError  platform_query_region(void *handle, unsigned long long address, P
 PlatformError  platform_get_main_module(void *handle, PlatformModuleInfo *info);
 
 PlatformError  platform_enable_debug_privilege(void);
-
-unsigned int   platform_last_os_error(void);
-PlatformError  platform_last_error(void);
 
 #endif

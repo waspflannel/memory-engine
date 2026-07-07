@@ -8,7 +8,7 @@ PlatformError process_list(ProcessEntry **entries, unsigned int *count)
     if (!entries || !count) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
-
+     
     PlatformProcessEntry *platform_entries = NULL;
     unsigned int platform_count = 0;
 
@@ -25,8 +25,7 @@ PlatformError process_list(ProcessEntry **entries, unsigned int *count)
 
     for (unsigned int i = 0; i < platform_count; i++) {
         list[i].pid = platform_entries[i].pid;
-        wcsncpy(list[i].name, platform_entries[i].name, PROCESS_NAME_MAX - 1);
-        list[i].name[PROCESS_NAME_MAX - 1] = L'\0';
+        wcsncpy_s(list[i].name, PROCESS_NAME_MAX, platform_entries[i].name, _TRUNCATE);
     }
 
     platform_free_process_list(platform_entries);
@@ -46,27 +45,26 @@ PlatformError process_attach(unsigned int pid, Target *target)
 
     memset(target, 0, sizeof(*target));
 
-    void *h = NULL;
-    PlatformError err = platform_open_process(pid, &h);
+    void *handle = NULL;
+    PlatformError err = platform_open_process(pid, &handle);
     if (err != PLATFORM_OK) {
         return err;
     }
 
-    target->handle = h;
+    target->handle = handle;
     target->pid = pid;
 
     PlatformModuleInfo module_info = {0};
-    err = platform_get_main_module(h, &module_info);
+    err = platform_get_main_module(handle, &module_info);
     if (err != PLATFORM_OK) {
-        platform_close_handle(h);
+        platform_close_handle(handle);
         target->handle = NULL;
         return err;
     }
 
     target->base      = module_info.base;
     target->base_size = module_info.size;
-    wcsncpy(target->name, module_info.name, PROCESS_NAME_MAX - 1);
-    target->name[PROCESS_NAME_MAX - 1] = L'\0';
+    wcsncpy_s(target->name, PROCESS_NAME_MAX, module_info.name, _TRUNCATE);
 
     return PLATFORM_OK;
 }
@@ -82,11 +80,6 @@ void process_detach(Target *target)
 PlatformError process_enable_privilege(void)
 {
     return platform_enable_debug_privilege();
-}
-
-int process_last_os_error(void)
-{
-    return (int)platform_last_os_error();
 }
 
 const char *process_error_string(PlatformError err)
@@ -107,9 +100,4 @@ const char *process_error_string(PlatformError err)
     case PLATFORM_ERR_INTERNAL:        return "internal error (out of memory)";
     default:                           return "unknown error";
     }
-}
-
-const char *process_last_error_string(void)
-{
-    return process_error_string(platform_last_error());
 }
