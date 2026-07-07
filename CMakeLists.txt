@@ -11,6 +11,7 @@ add_executable(memforge
     tui/render.c
     core/process/process.c
     core/memory/memory.c
+    core/scanner/scanner.c
     platform/platform.c
 )
 
@@ -27,6 +28,7 @@ add_executable(core_tests
     test/core_tests.c
     core/process/process.c
     core/memory/memory.c
+    core/scanner/scanner.c
     platform/platform.c
 )
 target_compile_options(core_tests PRIVATE /W4 /WX)

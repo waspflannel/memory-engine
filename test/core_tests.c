@@ -3,6 +3,7 @@
 #include <string.h>
 #include "core/process/process.h"
 #include "core/memory/memory.h"
+#include "core/scanner/scanner.h"
 
 static int failures = 0;
 
@@ -77,11 +78,37 @@ static void test_process_boundary(void)
           "process_list with NULL entries pointer fails");
 }
 
+static void test_scanner_boundary(void)
+{
+    printf("--- scanner boundary validation ---\n");
+    ScanResults results;
+    scan_results_init(&results);
+    scan_results_clear(&results);
+    check(results.count == 0, "scan_results_clear zeroes count");
+    scan_results_free(&results);
+
+    Target empty_target = {0};
+    ScanRegion *regions = NULL;
+    size_t region_count;
+
+    check(scanner_enumerate_regions(NULL, &regions, &region_count) != PLATFORM_OK,
+          "scanner_enumerate_regions with NULL target fails");
+    check(scanner_enumerate_regions(&empty_target, &regions, &region_count) != PLATFORM_OK,
+          "scanner_enumerate_regions with empty target fails");
+    check(scanner_enumerate_regions(&empty_target, NULL, &region_count) != PLATFORM_OK,
+          "scanner_enumerate_regions with NULL out-params fails");
+
+    scan_results_init(NULL);  /* must not crash on NULL */
+    scan_results_free(NULL);  /* must not crash on NULL */
+    check(1, "scan_results NULL guards do not crash");
+}
+
 int main(void)
 {
     test_error_strings();
     test_memory_boundary();
     test_process_boundary();
+    test_scanner_boundary();
 
     printf("\n%d failure(s)\n", failures);
     return failures > 0 ? 1 : 0;
