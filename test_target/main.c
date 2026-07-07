@@ -9,6 +9,9 @@ static volatile float   target_speed   = 1.5f;
 static volatile double  target_gravity = 9.81;
 static volatile wchar_t target_name[]  = L"TestTarget";
 static volatile int     target_ammo    = 30;
+static volatile unsigned int target_counter_u32 = 4294967295u;  /* for u32 scan */
+static volatile long long    target_counter_i64 = 0x123456789ABCll;  /* for i64 scan */
+static volatile char        target_ascii_string[] = "MemForgeASCII";  /* for string ASCII scan */
 
 int main(void)
 {
@@ -23,6 +26,9 @@ int main(void)
     wprintf(L"  target_gravity (f64)  @ 0x%p  = %.2f\n", (void *)&target_gravity, target_gravity);
     wprintf(L"  target_ammo    (i32)  @ 0x%p  = %d\n", (void *)&target_ammo, target_ammo);
     wprintf(L"  target_name    (str)  @ 0x%p  = %s\n", (void *)&target_name, target_name);
+    wprintf(L"  target_counter_u32 (u32) @ 0x%p = %u\n", (void *)&target_counter_u32, target_counter_u32);
+    wprintf(L"  target_counter_i64 (i64) @ 0x%p = 0x%llx\n", (void *)&target_counter_i64, target_counter_i64);
+    wprintf(L"  target_ascii_string (str/ascii) @ 0x%p = MemForgeASCII\n", (void *)&target_ascii_string);
     wprintf(L"\n");
     wprintf(L"Commands (press key, then Enter):\n");
     wprintf(L"  h = toggle health (100 <-> 50)\n");
