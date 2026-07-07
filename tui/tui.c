@@ -393,14 +393,15 @@ static void draw_scanner_panel(Screen *screen)
         screen_text(screen, main_x, row, L"No survivors -- try a different value or `scanclear`", s_attr_error);
     } else {
         wchar_t addrs[160];
+        unsigned short w = s->results.value_width;
+        unsigned short shown_w = w > 16 ? 16 : w;
         for (size_t i = 0; i < s->results.count && i < SCANNER_LIST_ROWS; i++) {
-            ScanHit *hit = &s->results.hits[i];
-            int p = swprintf_s(addrs, _countof(addrs), L"  0x%016llX  ", hit->address);
-            unsigned short w = s->param.width > 16 ? 16 : s->param.width;
-            for (unsigned short k = 0; k < w && p + 4 < (int)_countof(addrs); k++) {
-                p += swprintf_s(addrs + p, _countof(addrs) - p, L"%02X ", hit->value[k]);
+            const unsigned char *val = s->results.values + i * w;
+            int p = swprintf_s(addrs, _countof(addrs), L"  0x%016llX  ", s->results.addresses[i]);
+            for (unsigned short k = 0; k < shown_w && p + 4 < (int)_countof(addrs); k++) {
+                p += swprintf_s(addrs + p, _countof(addrs) - p, L"%02X ", val[k]);
             }
-            if (s->param.width > 16) {
+            if (w > 16) {
                 p += swprintf_s(addrs + p, _countof(addrs) - p, L"...");
             }
             screen_text(screen, main_x, row++, addrs, s_attr_normal);

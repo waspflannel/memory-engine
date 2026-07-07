@@ -48,18 +48,23 @@ static PlatformError merge_worker_results(ScanWork *works, int n, ScanResults *o
 void scan_results_init(ScanResults *results)
 {
     if (!results) return;
-    results->hits     = NULL;
-    results->count    = 0;
-    results->capacity = 0;
+    results->addresses   = NULL;
+    results->values       = NULL;
+    results->count        = 0;
+    results->capacity     = 0;
+    results->value_width  = 0;
 }
 
 void scan_results_free(ScanResults *results)
 {
     if (!results) return;
-    free(results->hits);
-    results->hits     = NULL;
-    results->count    = 0;
-    results->capacity = 0;
+    free(results->addresses);
+    free(results->values);
+    results->addresses  = NULL;
+    results->values     = NULL;
+    results->count      = 0;
+    results->capacity   = 0;
+    results->value_width = 0;
 }
 
 void scan_results_clear(ScanResults *results)
@@ -120,6 +125,20 @@ void scanner_session_destroy(ScanSession *session)
     if (!session) return;
     scan_results_free(&session->results);
     session->target = NULL;
+}
+
+PlatformError scanner_scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count, ScanResults *out)
+{
+    unsigned short width = session->param.width;
+    int snapshot = 0;
+    if (session->mode == SCAN_MODE_UNKNOWN_INITIAL) {
+        width = scan_type_width(session->param.type);
+        snapshot = 1;
+        if (width == 0) return PLATFORM_ERR_INVALID_PARAM;
+    } else if (width == 0) {
+        return PLATFORM_ERR_INVALID_PARAM;
+    }
+    return scan_regions(session, regions, count, width, snapshot, out);
 }
 
 PlatformError scanner_first_scan(ScanSession *session)
@@ -248,24 +267,26 @@ PlatformError scanner_next_scan(ScanSession *session)
 
     const size_t W = session->param.width;
 
-    ScanHit *hits = session->results.hits;
+    ScanResults *r = &session->results;
     size_t survivors = 0;
     unsigned char cur[SCAN_VALUE_MAX];
-    for (size_t i = 0; i < session->results.count; i++) {
-        PlatformError rd = memory_read(session->target, hits[i].address, cur, W);
+    for (size_t i = 0; i < r->count; i++) {
+        unsigned long long addr = r->addresses[i];
+        unsigned char       *prev = r->values + i * W;
+        PlatformError rd = memory_read(session->target, addr, cur, W);
         if (rd != PLATFORM_OK) {
             /* Target dropped this page since the last scan; drop the hit, don't fake. */
             continue;
         }
-        if (keep_hit(session, cur, hits[i].value, W)) {
-            /* In-place compact: survivors <= i, so reads of hits[i] stay safe.
-               Store the freshly-read value so the next relative-mode pass sees it. */
-            hits[survivors].address = hits[i].address;
-            memcpy(hits[survivors].value, cur, W);
+        if (keep_hit(session, cur, prev, W)) {
+            /* In-place compact: survivors <= i, so reads at indices [survivors, i]
+               are untouched. Update the address + last-seen value. */
+            r->addresses[survivors] = addr;
+            memcpy(r->values + survivors * W, cur, W);
             survivors++;
         }
     }
-    session->results.count = survivors;
+    r->count = survivors;
     return PLATFORM_OK;
 }
 
@@ -456,18 +477,29 @@ static int keep_hit(const ScanSession *session, const unsigned char *current,
 
 static int scan_results_append(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width)
 {
+    if (width > SCAN_VALUE_MAX) return 0;
+    if (results->value_width == 0) {
+        results->value_width = (unsigned short)width;
+    } else if (results->value_width != width) {
+        return 0;   /* caller mixed widths -- programmer error, refuse silently */
+    }
+
     if (results->count >= results->capacity) {
         size_t new_cap = results->capacity ? results->capacity * 2 : 64;
-        ScanHit *grown = (ScanHit *)realloc(results->hits, new_cap * sizeof(ScanHit));
-        if (!grown) {
+        unsigned long long *na = (unsigned long long *)realloc(results->addresses, new_cap * sizeof(unsigned long long));
+        if (!na) return 0;
+        unsigned char *nv = (unsigned char *)realloc(results->values, new_cap * results->value_width);
+        if (!nv) {
+            free(na);  /* orphan grown buffer; keep the old pair intact */
             return 0;
         }
-        results->hits     = grown;
+        results->addresses = na;
+        results->values   = nv;
         results->capacity = new_cap;
     }
-    results->hits[results->count].address = address;
-    if (width > SCAN_VALUE_MAX) width = SCAN_VALUE_MAX;
-    memcpy(results->hits[results->count].value, value, width);
+
+    results->addresses[results->count] = address;
+    memcpy(results->values + results->count * results->value_width, value, results->value_width);
     results->count++;
     return 1;
 }
@@ -518,34 +550,56 @@ static int scan_worker(void *arg)
     return 0;
 }
 
-/* Concatenate each worker's hits (in worker order) into a fresh array, freeing
-   the per-worker buffers as we steal them. Caller owns the merged array. */
+/* Concatenate each worker's hits (in worker order) into a fresh pair of arrays,
+   freeing the per-worker buffers as we steal them. Caller owns the merged set. */
 static PlatformError merge_worker_results(ScanWork *works, int n, ScanResults *out)
 {
     size_t total = 0;
     for (int i = 0; i < n; i++) total += works[i].results.count;
 
-    out->hits     = NULL;
-    out->count    = 0;
-    out->capacity = 0;
+    /* value_width is set per-worker on its first append; if worker 0 found no
+       hits its width is still 0. Scan every worker for a real width before we
+       size the merged `values` buffer (else we'd allocate 0 bytes). */
+    unsigned short width = 0;
+    for (int i = 0; i < n; i++) {
+        if (works[i].results.value_width) {
+            width = works[i].results.value_width;
+            break;
+        }
+    }
+
+    scan_results_init(out);
+    out->value_width = width;
     if (total == 0) {
         for (int i = 0; i < n; i++) scan_results_free(&works[i].results);
         return PLATFORM_OK;
     }
+    if (width == 0) {
+        /* total > 0 but no worker recorded a width -- inconsistent state. */
+        for (int i = 0; i < n; i++) scan_results_free(&works[i].results);
+        return PLATFORM_ERR_INTERNAL;
+    }
 
-    out->hits = (ScanHit *)malloc(total * sizeof(ScanHit));
-    if (!out->hits) {
+    out->addresses = (unsigned long long *)malloc(total * sizeof(unsigned long long));
+    out->values    = (unsigned char *)malloc((size_t)total * width);
+    if (!out->addresses || !out->values) {
+        free(out->addresses); free(out->values);
+        scan_results_init(out);
         for (int i = 0; i < n; i++) scan_results_free(&works[i].results);
         return PLATFORM_ERR_INTERNAL;
     }
     out->capacity = total;
 
-    ScanHit *p = out->hits;
+    size_t pos_a = 0;
+    size_t pos_v = 0;
     for (int i = 0; i < n; i++) {
-        if (works[i].results.count) {
-            memcpy(p, works[i].results.hits, works[i].results.count * sizeof(ScanHit));
-            p += works[i].results.count;
+        size_t c = works[i].results.count;
+        if (c) {
+            memcpy(out->addresses + pos_a, works[i].results.addresses, c * sizeof(unsigned long long));
+            memcpy(out->values + pos_v, works[i].results.values, c * width);
         }
+        pos_a += c;
+        pos_v += c * width;
         scan_results_free(&works[i].results);
     }
     out->count = total;

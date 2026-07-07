@@ -22,17 +22,20 @@ typedef struct {
     size_t             size;
 } ScanRegion;
 
-/* One surviving address plus its last-seen value bytes (width fixed per scan). */
+/*
+ * The live result set of a scan session. Stored compactly: `addresses` is one
+ * 8-byte slot per hit, and `values` holds `count * value_width` bytes packed
+ * together (one width-sized value per hit). Phase-2 pitfalls warn that an
+ * unknown-initial first scan matches huge swaths of memory; per-hit storage
+ * must be tight (8 + width bytes), not a fixed 256-byte slot. value_width is
+ * fixed by the first scan and reused on narrowing.
+ */
 typedef struct {
-    unsigned long long address;
-    unsigned char      value[SCAN_VALUE_MAX];
-} ScanHit;
-
-/* The live result set of a scan session. */
-typedef struct {
-    ScanHit *hits;
-    size_t   count;
-    size_t   capacity;
+    unsigned long long *addresses;
+    unsigned char      *values;          /* count * value_width bytes */
+    size_t              count;
+    size_t              capacity;
+    unsigned short      value_width;
 } ScanResults;
 
 void scan_results_init(ScanResults *results);
@@ -117,5 +120,13 @@ void           scanner_session_destroy(ScanSession *session);
    that hit. */
 PlatformError  scanner_first_scan(ScanSession *session);
 PlatformError  scanner_next_scan(ScanSession *session);
+
+/*
+ * Scan a given region slice single-threaded, appending hits to `out`. The
+ * first scan calls this per worker internally; exposed so tests can compute a
+ * single-threaded baseline to compare against the multi-threaded first scan
+ * (phase-2 DoD: threaded vs single result equality on the same snapshot).
+ */
+PlatformError  scanner_scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count, ScanResults *out);
 
 #endif
