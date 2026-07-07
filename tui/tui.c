@@ -118,11 +118,16 @@ static void cmd_scan(const wchar_t *args);
 static void cmd_next(const wchar_t *args);
 static void cmd_scanclear(void);
 static void cmd_type(const wchar_t *args);
+static void cmd_mode(const wchar_t *args);
 static void cmd_strenc(const wchar_t *args);
 static int  parse_scan_value(const wchar_t *args, ScanValue *out);
+static int  parse_two_numeric(const wchar_t *args, ScanType type, ScanValue *lo, ScanValue *hi);
 static int  parse_aob_value(const wchar_t *args, ScanValue *out);
 static int  parse_string_value(const wchar_t *args, ScanValue *out);
+static void set_int_value(ScanValue *v, ScanType type, int x);
+static void set_uint_value(ScanValue *v, ScanType type, unsigned int x);
 static const wchar_t *scan_type_name(ScanType type);
+static const wchar_t *scan_mode_name(ScanMode mode);
 static void exec_command(void);
 static void handle_key(WORD vk, WCHAR ch);
 static void read_input(void);
@@ -359,8 +364,8 @@ static void draw_scanner_panel(Screen *screen)
 
     const wchar_t *enc = s->param.type == SCAN_TYPE_STRING
         ? (tui_state.string_enc == 1 ? L"utf16" : L"ascii") : L"-";
-    swprintf_s(line, _countof(line), L"Scanner -- type: %s  mode: exact  enc: %s",
-               scan_type_name(s->param.type), enc);
+    swprintf_s(line, _countof(line), L"Scanner -- type: %s  mode: %s  enc: %s",
+               scan_type_name(s->param.type), scan_mode_name(s->mode), enc);
     screen_text(screen, main_x, row++, line, s_attr_normal);
 
     /* Hex byte dump of the current param (works for every type). */
@@ -410,7 +415,7 @@ static void draw_scanner_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > row) {
         screen_text(screen, main_x, help_row,
-                    L"commands: type <name>  scan <value>  next <value>  scanclear  strenc ascii|utf16",
+                    L"cmds: type <name>  mode <name>  scan <v>|?  next <v>  scanclear  strenc ascii|utf16",
                     s_attr_border);
     }
 }
@@ -603,9 +608,21 @@ static void cmd_scan(const wchar_t *args)
         return;
     }
 
-    if (!parse_scan_value(args, &tui_state.scanner.param)) {
-        set_status(L"usage: scan <value>  (could not parse for current type)", TRUE);
-        return;
+    /* `scan ?` / `scan unknown` seeds with unknown-initial: snapshot every
+       address. Otherwise parse a value and first-scan for it (exact). */
+    int unknown = (wcscmp(args, L"?") == 0 || wcscmp(args, L"unknown") == 0);
+    if (unknown) {
+        if (scan_type_width(tui_state.scanner.param.type) == 0) {
+            set_status(L"unknown-initial needs a fixed-width numeric type", TRUE);
+            return;
+        }
+        tui_state.scanner.mode = SCAN_MODE_UNKNOWN_INITIAL;
+    } else {
+        if (!parse_scan_value(args, &tui_state.scanner.param)) {
+            set_status(L"usage: scan <value>  (or `scan ?` for unknown-initial)", TRUE);
+            return;
+        }
+        tui_state.scanner.mode = SCAN_MODE_EXACT;
     }
 
     PlatformError err = scanner_first_scan(&tui_state.scanner);
@@ -617,7 +634,8 @@ static void cmd_scan(const wchar_t *args)
     }
 
     wchar_t msg[128];
-    swprintf_s(msg, _countof(msg), L"First scan: %llu matches", (unsigned long long)tui_state.scanner.results.count);
+    swprintf_s(msg, _countof(msg), L"First scan: %llu hits",
+               (unsigned long long)tui_state.scanner.results.count);
     set_status(msg, FALSE);
 }
 
@@ -632,12 +650,36 @@ static void cmd_next(const wchar_t *args)
         return;
     }
 
-    if (!parse_scan_value(args, &tui_state.scanner.param)) {
-        set_status(L"usage: next <value>  (could not parse for current type)", TRUE);
+    ScanSession *s = &tui_state.scanner;
+    ScanType type = s->param.type;
+
+    switch (s->mode) {
+    case SCAN_MODE_EXACT:
+    case SCAN_MODE_INCREASED_BY:
+    case SCAN_MODE_DECREASED_BY:
+        if (!parse_scan_value(args, &s->param)) {
+            set_status(L"usage: next <value>  (could not parse for current type)", TRUE);
+            return;
+        }
+        break;
+    case SCAN_MODE_BETWEEN:
+        if (!parse_two_numeric(args, type, &s->param, &s->param2)) {
+            set_status(L"usage: next <lo> <hi>  (numeric type only)", TRUE);
+            return;
+        }
+        break;
+    case SCAN_MODE_CHANGED:
+    case SCAN_MODE_UNCHANGED:
+    case SCAN_MODE_INCREASED:
+    case SCAN_MODE_DECREASED:
+        /* No value needed -- compares current vs last-seen. */
+        break;
+    case SCAN_MODE_UNKNOWN_INITIAL:
+        set_status(L"Pick a narrowing mode first: `mode <name>`", TRUE);
         return;
     }
 
-    PlatformError err = scanner_next_scan(&tui_state.scanner);
+    PlatformError err = scanner_next_scan(s);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
         swprintf_s(msg, _countof(msg), L"next scan failed: %S", process_error_string(err));
@@ -646,7 +688,8 @@ static void cmd_next(const wchar_t *args)
     }
 
     wchar_t msg[128];
-    swprintf_s(msg, _countof(msg), L"Next scan: %llu survivors", (unsigned long long)tui_state.scanner.results.count);
+    swprintf_s(msg, _countof(msg), L"Next scan (%s): %llu survivors",
+               scan_mode_name(s->mode), (unsigned long long)s->results.count);
     set_status(msg, FALSE);
 }
 
@@ -689,6 +732,44 @@ static void cmd_type(const wchar_t *args)
 
     wchar_t msg[64];
     swprintf_s(msg, _countof(msg), L"Type: %s", scan_type_name(type));
+    set_status(msg, FALSE);
+}
+
+static void cmd_mode(const wchar_t *args)
+{
+    if (!tui_state.attached || !tui_state.scanner_inited) {
+        set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    ScanMode m;
+    if (wcscmp(args, L"exact") == 0)             m = SCAN_MODE_EXACT;
+    else if (wcscmp(args, L"changed") == 0)      m = SCAN_MODE_CHANGED;
+    else if (wcscmp(args, L"unchanged") == 0)    m = SCAN_MODE_UNCHANGED;
+    else if (wcscmp(args, L"increased") == 0)    m = SCAN_MODE_INCREASED;
+    else if (wcscmp(args, L"decreased") == 0)    m = SCAN_MODE_DECREASED;
+    else if (wcscmp(args, L"increasedby") == 0)  m = SCAN_MODE_INCREASED_BY;
+    else if (wcscmp(args, L"decreasedby") == 0)  m = SCAN_MODE_DECREASED_BY;
+    else if (wcscmp(args, L"between") == 0)      m = SCAN_MODE_BETWEEN;
+    else {
+        set_status(L"usage: mode exact|changed|unchanged|increased|decreased|increasedby|decreasedby|between", TRUE);
+        return;
+    }
+
+    /* Increased/decreased/by/between need a numeric type (changed/unchanged and
+       exact apply to every type). scan_type_width is 0 for string/AOB. */
+    int needs_numeric = (m == SCAN_MODE_INCREASED || m == SCAN_MODE_DECREASED ||
+                         m == SCAN_MODE_INCREASED_BY || m == SCAN_MODE_DECREASED_BY ||
+                         m == SCAN_MODE_BETWEEN);
+    if (needs_numeric && scan_type_width(tui_state.scanner.param.type) == 0) {
+        set_status(L"that mode needs a numeric type", TRUE);
+        return;
+    }
+
+    tui_state.scanner.mode = m;
+
+    wchar_t msg[64];
+    swprintf_s(msg, _countof(msg), L"Mode: %s", scan_mode_name(m));
     set_status(msg, FALSE);
 }
 
@@ -770,6 +851,12 @@ static void exec_command(void)
 
     if (wcsncmp(tui_state.cmd_buf, L"type ", 5) == 0) {
         cmd_type(tui_state.cmd_buf + 5);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"mode ", 5) == 0) {
+        cmd_mode(tui_state.cmd_buf + 5);
         tui_state.cmd_len = 0;
         return;
     }
@@ -953,6 +1040,20 @@ static int parse_string_value(const wchar_t *args, ScanValue *out)
     return 1;
 }
 
+static void set_int_value(ScanValue *v, ScanType type, int x)
+{
+    if (type == SCAN_TYPE_I8)  { signed char t = (signed char)x; scanner_value_set(v, type, &t, 1); }
+    else if (type == SCAN_TYPE_I16) { short t = (short)x;        scanner_value_set(v, type, &t, 2); }
+    else                             { int t = x;                 scanner_value_set(v, type, &t, 4); }
+}
+
+static void set_uint_value(ScanValue *v, ScanType type, unsigned int x)
+{
+    if (type == SCAN_TYPE_U8) { unsigned char t = (unsigned char)x;  scanner_value_set(v, type, &t, 1); }
+    else if (type == SCAN_TYPE_U16) { unsigned short t = (unsigned short)x; scanner_value_set(v, type, &t, 2); }
+    else                            { unsigned int t = x;            scanner_value_set(v, type, &t, 4); }
+}
+
 static int parse_scan_value(const wchar_t *args, ScanValue *out)
 {
     switch (out->type) {
@@ -961,9 +1062,7 @@ static int parse_scan_value(const wchar_t *args, ScanValue *out)
     case SCAN_TYPE_I32: {
         int x = 0;
         if (swscanf_s(args, L"%d", &x) != 1) return 0;
-        if (out->type == SCAN_TYPE_I8)  { signed char t = (signed char)x;  scanner_value_set(out, out->type, &t, 1); }
-        else if (out->type == SCAN_TYPE_I16) { short t = (short)x;        scanner_value_set(out, out->type, &t, 2); }
-        else                                { int t = x;                    scanner_value_set(out, out->type, &t, 4); }
+        set_int_value(out, out->type, x);
         return 1;
     }
     case SCAN_TYPE_I64: {
@@ -977,9 +1076,7 @@ static int parse_scan_value(const wchar_t *args, ScanValue *out)
     case SCAN_TYPE_U32: {
         unsigned int x = 0;
         if (swscanf_s(args, L"%u", &x) != 1) return 0;
-        if (out->type == SCAN_TYPE_U8) { unsigned char t = (unsigned char)x;  scanner_value_set(out, out->type, &t, 1); }
-        else if (out->type == SCAN_TYPE_U16) { unsigned short t = (unsigned short)x; scanner_value_set(out, out->type, &t, 2); }
-        else                                { unsigned int t = x;             scanner_value_set(out, out->type, &t, 4); }
+        set_uint_value(out, out->type, x);
         return 1;
     }
     case SCAN_TYPE_U64: {
@@ -1003,5 +1100,75 @@ static int parse_scan_value(const wchar_t *args, ScanValue *out)
     case SCAN_TYPE_STRING: return parse_string_value(args, out);
     case SCAN_TYPE_AOB:    return parse_aob_value(args, out);
     default:               return 0;
+    }
+}
+
+static int parse_two_numeric(const wchar_t *args, ScanType type, ScanValue *lo, ScanValue *hi)
+{
+    switch (type) {
+    case SCAN_TYPE_I8:
+    case SCAN_TYPE_I16:
+    case SCAN_TYPE_I32: {
+        int a, b;
+        if (swscanf_s(args, L"%d %d", &a, &b) != 2) return 0;
+        set_int_value(lo, type, a);
+        set_int_value(hi, type, b);
+        return 1;
+    }
+    case SCAN_TYPE_I64: {
+        long long a, b;
+        if (swscanf_s(args, L"%lld %lld", &a, &b) != 2) return 0;
+        scanner_value_set(lo, type, &a, sizeof(a));
+        scanner_value_set(hi, type, &b, sizeof(b));
+        return 1;
+    }
+    case SCAN_TYPE_U8:
+    case SCAN_TYPE_U16:
+    case SCAN_TYPE_U32: {
+        unsigned int a, b;
+        if (swscanf_s(args, L"%u %u", &a, &b) != 2) return 0;
+        set_uint_value(lo, type, a);
+        set_uint_value(hi, type, b);
+        return 1;
+    }
+    case SCAN_TYPE_U64: {
+        unsigned long long a, b;
+        if (swscanf_s(args, L"%llu %llu", &a, &b) != 2) return 0;
+        scanner_value_set(lo, type, &a, sizeof(a));
+        scanner_value_set(hi, type, &b, sizeof(b));
+        return 1;
+    }
+    case SCAN_TYPE_F32: {
+        float a, b;
+        if (swscanf_s(args, L"%f %f", &a, &b) != 2) return 0;
+        scanner_value_set(lo, type, &a, sizeof(a));
+        scanner_value_set(hi, type, &b, sizeof(b));
+        return 1;
+    }
+    case SCAN_TYPE_F64: {
+        double a, b;
+        if (swscanf_s(args, L"%lf %lf", &a, &b) != 2) return 0;
+        scanner_value_set(lo, type, &a, sizeof(a));
+        scanner_value_set(hi, type, &b, sizeof(b));
+        return 1;
+    }
+    default:
+        return 0;   /* string/AOB: between unsupported */
+    }
+}
+
+static const wchar_t *scan_mode_name(ScanMode mode)
+{
+    switch (mode) {
+    case SCAN_MODE_EXACT:        return L"exact";
+    case SCAN_MODE_CHANGED:      return L"changed";
+    case SCAN_MODE_UNCHANGED:    return L"unchanged";
+    case SCAN_MODE_INCREASED:    return L"increased";
+    case SCAN_MODE_DECREASED:    return L"decreased";
+    case SCAN_MODE_INCREASED_BY: return L"increasedby";
+    case SCAN_MODE_DECREASED_BY: return L"decreasedby";
+    case SCAN_MODE_BETWEEN:      return L"between";
+    case SCAN_MODE_UNKNOWN_INITIAL: return L"unknown";
+    default:                     return L"?";
     }
 }

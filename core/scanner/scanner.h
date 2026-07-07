@@ -68,7 +68,15 @@ typedef enum {
 } ScanType;
 
 typedef enum {
-    SCAN_MODE_EXACT,
+    SCAN_MODE_EXACT,            /* first or next: keep where value == param */
+    SCAN_MODE_CHANGED,          /* next: keep where value differs from last-seen */
+    SCAN_MODE_UNCHANGED,        /* next: keep where value equals last-seen */
+    SCAN_MODE_INCREASED,        /* next: numeric only */
+    SCAN_MODE_DECREASED,        /* next: numeric only */
+    SCAN_MODE_INCREASED_BY,     /* next: numeric only; param is the delta */
+    SCAN_MODE_DECREASED_BY,     /* next: numeric only; param is the delta */
+    SCAN_MODE_BETWEEN,          /* next: numeric only; keep where lo <= value <= hi (param, param2) */
+    SCAN_MODE_UNKNOWN_INITIAL,  /* first scan only: snapshot every address with its current value */
 } ScanMode;
 
 /*
@@ -88,7 +96,8 @@ typedef struct {
 typedef struct {
     const Target *target;   /* borrowed, not owned */
     ScanMode      mode;
-    ScanValue     param;        /* exact value / first operand */
+    ScanValue     param;        /* exact value / delta / lower bound */
+    ScanValue     param2;       /* upper bound for SCAN_MODE_BETWEEN */
     ScanResults   results;
     int           has_results;        /* set after first scan; next scan requires it */
 } ScanSession;
