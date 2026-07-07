@@ -48,4 +48,36 @@ void scan_results_clear(ScanResults *results);
 PlatformError scanner_enumerate_regions(const Target *target, ScanRegion **regions, size_t *count);
 void          scanner_free_regions(ScanRegion *regions);
 
+/* Build order: i32/exact first end-to-end, then widen to all types + modes
+   (phase-2 doc). Each enum grows as a new type/mode lands -- no speculative
+   slots. */
+
+typedef enum {
+    SCAN_TYPE_I32,
+} ScanType;
+
+typedef enum {
+    SCAN_MODE_EXACT,
+} ScanMode;
+
+typedef struct {
+    const Target *target;   /* borrowed, not owned */
+    ScanType      type;
+    ScanMode      mode;
+    int           value_i32;          /* exact-value param for SCAN_TYPE_I32 / SCAN_MODE_EXACT */
+    ScanResults   results;
+    int           has_results;        /* set after first scan; next scan requires it */
+} ScanSession;
+
+void           scanner_session_init(ScanSession *session, const Target *target, ScanType type, ScanMode mode);
+void           scanner_session_destroy(ScanSession *session);
+
+/* First scan reads every byte offset of every scannable region and keeps
+   matches. Next scan re-reads surviving addresses, re-applies the predicate,
+   and compacts survivors in place. A failed region read skips that region
+   (never fakes zeros); a failed single-address read during narrowing drops
+   that hit. */
+PlatformError  scanner_first_scan(ScanSession *session);
+PlatformError  scanner_next_scan(ScanSession *session);
+
 #endif

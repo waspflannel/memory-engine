@@ -98,6 +98,13 @@ static void test_scanner_boundary(void)
     check(scanner_enumerate_regions(&empty_target, NULL, &region_count) != PLATFORM_OK,
           "scanner_enumerate_regions with NULL out-params fails");
 
+    ScanSession session;
+    scanner_session_init(&session, &empty_target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
+    check(scanner_first_scan(NULL) != PLATFORM_OK, "scanner_first_scan NULL session fails");
+    check(scanner_first_scan(&session) != PLATFORM_OK, "scanner_first_scan with empty target fails");
+    check(scanner_next_scan(&session) != PLATFORM_OK, "scanner_next_scan without prior first scan fails");
+    scanner_session_destroy(&session);
+
     scan_results_init(NULL);  /* must not crash on NULL */
     scan_results_free(NULL);  /* must not crash on NULL */
     check(1, "scan_results NULL guards do not crash");
