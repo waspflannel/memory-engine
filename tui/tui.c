@@ -232,7 +232,7 @@ static void draw_header(Screen *screen)
 {
     screen_text(screen, 2, HEADER_ROW, L"MemForge v0.1", s_attr_header);
 
-    wchar_t status[128];
+    wchar_t status[PROCESS_NAME_MAX + 32];
     if (tui_state.attached) {
         swprintf_s(status, _countof(status), L"[Process: %s PID:%u]", tui_state.target.name, tui_state.target.pid);
     } else {
@@ -279,7 +279,7 @@ static void draw_process_list(Screen *screen)
     if (tui_state.process_scroll > max_scroll) tui_state.process_scroll = max_scroll;
     if (tui_state.process_scroll < 0) tui_state.process_scroll = 0;
 
-    wchar_t line[256];
+    wchar_t line[PROCESS_NAME_MAX + 16];
     for (int i = 0; i < vis_rows; i++) {
         int pi = tui_state.process_scroll + i;
         int row = CONTENT_START + i;
@@ -323,10 +323,11 @@ static void draw_command(Screen *screen)
 
     wchar_t display[STATUS_MSG_MAX];
     if (tui_state.status_msg[0] && (GetTickCount64() - tui_state.status_ticks) < MAX_STATUS_TICKS) {
-        swprintf_s(display, STATUS_MSG_MAX, L" %s", tui_state.status_msg);
-        WORD attr = tui_state.status_error ? s_attr_error : s_attr_normal;
-        screen_text(screen, 1, cmd_row, display, attr);
+        swprintf_s(display, STATUS_MSG_MAX, L" %s", tui_state.status_msg); //set display to error message
+        WORD attr = tui_state.status_error ? s_attr_error : s_attr_normal; // get right styling
+        screen_text(screen, 1, cmd_row, display, attr); //display message with right styling
     } else {
+		// if no status message or expired, display the command buffer
         swprintf_s(display, STATUS_MSG_MAX, L" > %s", tui_state.cmd_buf);
         WORD attr;
         if (tui_state.focus == FOCUS_COMMAND) {
@@ -335,10 +336,6 @@ static void draw_command(Screen *screen)
             attr = s_attr_normal;
         }
         screen_text(screen, 1, cmd_row, display, attr);
-        if (tui_state.focus == FOCUS_COMMAND) {
-            int cursor_x = 4 + tui_state.cmd_len;
-            screen_put(screen, cursor_x, cmd_row, L' ', s_attr_sel | COMMON_LVB_UNDERSCORE);
-        }
     }
 }
 
@@ -403,7 +400,7 @@ static int do_attach(DWORD pid)
     }
 
     tui_state.attached = TRUE;
-    wchar_t msg[256];
+    wchar_t msg[PROCESS_NAME_MAX + 32];
     swprintf_s(msg, _countof(msg), L"Attached to %s (PID %u)", tui_state.target.name, pid);
     set_status(msg, FALSE);
     return 1;

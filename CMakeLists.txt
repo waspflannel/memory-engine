@@ -5,11 +5,6 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
-# We use ISO C string functions (e.g. wcsncpy) in the core rather than MSVC's
-# non-portable _s variants. MSVC flags those as C4996 "deprecated"; with /WX that
-# becomes a hard error. Turn off that specific nag — it is not a real defect.
-add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
-
 add_executable(memforge
     tui/main.c
     tui/tui.c

@@ -6,13 +6,7 @@
 #include <psapi.h>
 #include "platform/platform.h"
 
-static unsigned int  s_last_os_error = 0;
-static PlatformError s_last_error    = PLATFORM_OK;
-
 /* Forward declarations — definitions at bottom of file. */
-static PlatformError fail(PlatformError err);
-static PlatformError fail_with_os(PlatformError err, unsigned int os_err);
-static PlatformError succeed(void);
 static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity, unsigned int n);
 
 /* ---- Public API (order matches platform.h) ---- */
@@ -20,7 +14,6 @@ static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int
 PlatformError platform_list_processes(PlatformProcessEntry **entries, unsigned int *count)
 {
     if (!entries || !count) {
-        s_last_error = PLATFORM_ERR_INVALID_PARAM;
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
@@ -29,7 +22,7 @@ PlatformError platform_list_processes(PlatformProcessEntry **entries, unsigned i
 
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) {
-        return fail(PLATFORM_ERR_SNAPSHOT_FAILED);
+        return PLATFORM_ERR_SNAPSHOT_FAILED;
     }
 
     unsigned int capacity = 64;
@@ -38,7 +31,7 @@ PlatformError platform_list_processes(PlatformProcessEntry **entries, unsigned i
     PlatformProcessEntry *list = (PlatformProcessEntry *)HeapAlloc(GetProcessHeap(), 0, capacity * sizeof(PlatformProcessEntry));
     if (!list) {
         CloseHandle(snap);
-        return fail_with_os(PLATFORM_ERR_INTERNAL, ERROR_OUTOFMEMORY);
+        return PLATFORM_ERR_INTERNAL;
     }
 
     PROCESSENTRY32W pe = {0};
@@ -64,12 +57,12 @@ PlatformError platform_list_processes(PlatformProcessEntry **entries, unsigned i
 
     if (n == 0) {
         HeapFree(GetProcessHeap(), 0, list);
-        return succeed();
+        return PLATFORM_OK;
     }
 
     *entries = list;
     *count = n;
-    return succeed();
+    return PLATFORM_OK;
 }
 
 void platform_free_process_list(PlatformProcessEntry *entries)
@@ -82,14 +75,13 @@ void platform_free_process_list(PlatformProcessEntry *entries)
 PlatformError platform_open_process(unsigned int pid, void **out_handle)
 {
     if (!out_handle) {
-        s_last_error = PLATFORM_ERR_INVALID_PARAM;
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
     *out_handle = NULL;
 
     if (pid == 0 || pid == (unsigned int)GetCurrentProcessId()) {
-        return fail_with_os(PLATFORM_ERR_INVALID_PARAM, ERROR_INVALID_PARAMETER);
+        return PLATFORM_ERR_INVALID_PARAM;
     }
 
     HANDLE handle = OpenProcess(
@@ -98,15 +90,14 @@ PlatformError platform_open_process(unsigned int pid, void **out_handle)
         FALSE, (DWORD)pid);
 
     if (!handle) {
-        DWORD os_err = GetLastError();
-        if (os_err == ERROR_ACCESS_DENIED) {
-            return fail_with_os(PLATFORM_ERR_ACCESS_DENIED, os_err);
+        if (GetLastError() == ERROR_ACCESS_DENIED) {
+            return PLATFORM_ERR_ACCESS_DENIED;
         }
-        return fail_with_os(PLATFORM_ERR_NOT_FOUND, os_err);
+        return PLATFORM_ERR_NOT_FOUND;
     }
 
     *out_handle = handle;
-    return succeed();
+    return PLATFORM_OK;
 }
 
 void platform_close_handle(void *handle)
@@ -120,7 +111,6 @@ PlatformError platform_read_memory(void *handle, unsigned long long address, voi
 {
     if (!handle || !buffer || size == 0) {
         if (bytes_read) *bytes_read = 0;
-        s_last_error = PLATFORM_ERR_INVALID_PARAM;
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
@@ -133,19 +123,18 @@ PlatformError platform_read_memory(void *handle, unsigned long long address, voi
 
     if (!succeeded) {
         if (local_bytes > 0) {
-            return fail(PLATFORM_ERR_PARTIAL_READ);
+            return PLATFORM_ERR_PARTIAL_READ;
         }
-        return fail(PLATFORM_ERR_READ_FAILED);
+        return PLATFORM_ERR_READ_FAILED;
     }
 
-    return succeed();
+    return PLATFORM_OK;
 }
 
 PlatformError platform_write_memory(void *handle, unsigned long long address, const void *buffer, size_t size, size_t *bytes_written)
 {
     if (!handle || !buffer || size == 0) {
         if (bytes_written) *bytes_written = 0;
-        s_last_error = PLATFORM_ERR_INVALID_PARAM;
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
@@ -158,18 +147,17 @@ PlatformError platform_write_memory(void *handle, unsigned long long address, co
 
     if (!succeeded) {
         if (local_bytes > 0) {
-            return fail(PLATFORM_ERR_PARTIAL_WRITE);
+            return PLATFORM_ERR_PARTIAL_WRITE;
         }
-        return fail(PLATFORM_ERR_WRITE_FAILED);
+        return PLATFORM_ERR_WRITE_FAILED;
     }
 
-    return succeed();
+    return PLATFORM_OK;
 }
 
 PlatformError platform_query_region(void *handle, unsigned long long address, PlatformRegionInfo *info)
 {
     if (!handle || !info) {
-        s_last_error = PLATFORM_ERR_INVALID_PARAM;
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
@@ -177,7 +165,7 @@ PlatformError platform_query_region(void *handle, unsigned long long address, Pl
     SIZE_T ret = VirtualQueryEx((HANDLE)handle, (LPCVOID)(UINT_PTR)address, &mbi, sizeof(mbi));
 
     if (ret == 0) {
-        return fail(PLATFORM_ERR_QUERY_FAILED);
+        return PLATFORM_ERR_QUERY_FAILED;
     }
 
     info->base    = (unsigned long long)(UINT_PTR)mbi.BaseAddress;
@@ -186,13 +174,12 @@ PlatformError platform_query_region(void *handle, unsigned long long address, Pl
     info->state   = (unsigned int)mbi.State;
     info->type    = (unsigned int)mbi.Type;
 
-    return succeed();
+    return PLATFORM_OK;
 }
 
 PlatformError platform_get_main_module(void *handle, PlatformModuleInfo *info)
 {
     if (!handle || !info) {
-        s_last_error = PLATFORM_ERR_INVALID_PARAM;
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
@@ -200,16 +187,16 @@ PlatformError platform_get_main_module(void *handle, PlatformModuleInfo *info)
     DWORD needed = 0;
 
     if (!EnumProcessModules((HANDLE)handle, modules, sizeof(modules), &needed)) {
-        return fail(PLATFORM_ERR_MODULE_FAILED);
+        return PLATFORM_ERR_MODULE_FAILED;
     }
 
     if (needed == 0) {
-        return fail_with_os(PLATFORM_ERR_MODULE_FAILED, ERROR_NOT_FOUND);
+        return PLATFORM_ERR_MODULE_FAILED;
     }
 
     MODULEINFO modInfo = {0};
     if (!GetModuleInformation((HANDLE)handle, modules[0], &modInfo, sizeof(modInfo))) {
-        return fail(PLATFORM_ERR_MODULE_FAILED);
+        return PLATFORM_ERR_MODULE_FAILED;
     }
 
     info->base = (unsigned long long)(UINT_PTR)modInfo.lpBaseOfDll;
@@ -217,71 +204,42 @@ PlatformError platform_get_main_module(void *handle, PlatformModuleInfo *info)
 
     DWORD nameLen = GetModuleBaseNameW((HANDLE)handle, modules[0], info->name, PLATFORM_NAME_MAX);
     if (nameLen == 0) {
-        return fail(PLATFORM_ERR_MODULE_FAILED);
+        return PLATFORM_ERR_MODULE_FAILED;
     }
 
-    return succeed();
+    return PLATFORM_OK;
 }
 
 PlatformError platform_enable_debug_privilege(void)
 {
     HANDLE token = NULL;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
-        return fail(PLATFORM_ERR_PRIVILEGE_FAILED);
+        return PLATFORM_ERR_PRIVILEGE_FAILED;
     }
 
     TOKEN_PRIVILEGES tp = {0};
     if (!LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &tp.Privileges[0].Luid)) {
-        DWORD os_err = GetLastError();
         CloseHandle(token);
-        return fail_with_os(PLATFORM_ERR_PRIVILEGE_FAILED, os_err);
+        return PLATFORM_ERR_PRIVILEGE_FAILED;
     }
 
     tp.PrivilegeCount = 1;
     tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
 
+    /* AdjustTokenPrivileges can return TRUE yet leave the privilege unassigned;
+       read GetLastError() before CloseHandle clobbers it. */
     AdjustTokenPrivileges(token, FALSE, &tp, sizeof(tp), NULL, NULL);
-    DWORD err = GetLastError();
+    DWORD adjust_error = GetLastError();
     CloseHandle(token);
 
-    if (err != ERROR_SUCCESS) {
-        return fail_with_os(PLATFORM_ERR_PRIVILEGE_FAILED, err);
+    if (adjust_error != ERROR_SUCCESS) {
+        return PLATFORM_ERR_PRIVILEGE_FAILED;
     }
 
-    return succeed();
-}
-
-unsigned int platform_last_os_error(void)
-{
-    return s_last_os_error;
-}
-
-PlatformError platform_last_error(void)
-{
-    return s_last_error;
+    return PLATFORM_OK;
 }
 
 /* ---- Static helpers ---- */
-
-static PlatformError fail(PlatformError err)
-{
-    s_last_error    = err;
-    s_last_os_error = (unsigned int)GetLastError();
-    return err;
-}
-
-static PlatformError fail_with_os(PlatformError err, unsigned int os_err)
-{
-    s_last_error    = err;
-    s_last_os_error = os_err;
-    return err;
-}
-
-static PlatformError succeed(void)
-{
-    s_last_error = PLATFORM_OK;
-    return PLATFORM_OK;
-}
 
 static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity, unsigned int n)
 {
@@ -290,10 +248,10 @@ static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int
         GetProcessHeap(), 0, *capacity * sizeof(PlatformProcessEntry));
     if (!grown) {
         HeapFree(GetProcessHeap(), 0, *list);
-        return fail_with_os(PLATFORM_ERR_INTERNAL, ERROR_OUTOFMEMORY);
+        return PLATFORM_ERR_INTERNAL;
     }
     memcpy(grown, *list, n * sizeof(PlatformProcessEntry));
     HeapFree(GetProcessHeap(), 0, *list);
     *list = grown;
-    return succeed();
+    return PLATFORM_OK;
 }

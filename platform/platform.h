@@ -55,7 +55,4 @@ PlatformError  platform_get_main_module(void *handle, PlatformModuleInfo *info);
 
 PlatformError  platform_enable_debug_privilege(void);
 
-unsigned int   platform_last_os_error(void);
-PlatformError  platform_last_error(void);
-
 #endif

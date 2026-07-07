@@ -27,8 +27,6 @@ void          process_detach(Target *target);
 
 PlatformError process_enable_privilege(void);
 
-int           process_last_os_error(void);
 const char   *process_error_string(PlatformError err);
-const char   *process_last_error_string(void);
 
 #endif
