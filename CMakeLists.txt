@@ -8,6 +8,8 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 add_executable(memforge
     tui/main.c
     tui/tui.c
+    tui/commands.c
+    tui/helpers.c
     tui/render.c
     core/process/process.c
     core/memory/memory.c
