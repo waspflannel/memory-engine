@@ -387,30 +387,47 @@ static void draw_command(Screen *screen)
     }
 }
 
+/* Advance past exactly one wrapped line of `text` at `max_w` columns and return
+   the start of the next line. Breaks after the last space that fits; hard-splits
+   a single word longer than max_w. */
+static const wchar_t *wrap_advance(const wchar_t *p, int max_w)
+{
+    const wchar_t *end = p;
+    const wchar_t *last_space = NULL;
+    int len = 0;
+    while (*end && len < max_w) {
+        if (*end == L' ') last_space = end;
+        end++;
+        len++;
+    }
+    if (len >= max_w && *end && *end != L' ' && last_space) {
+        end = last_space + 1;
+    }
+    if (end <= p) end = p + (int)wcslen(p);
+    return end;
+}
+
+/* Number of lines `text` wraps to at `max_w` columns (at least 1). */
+static int wrapped_rows(const wchar_t *text, int max_w)
+{
+    int rows = 0;
+    for (const wchar_t *p = text; *p; p = wrap_advance(p, max_w)) rows++;
+    return rows > 0 ? rows : 1;
+}
+
 static int draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *text, WORD attr, int max_rows)
 {
     int rows = 0;
     const wchar_t *p = text;
     while (*p && rows < max_rows) {
-        const wchar_t *end = p;
-        const wchar_t *last_space = NULL;
-        int len = 0;
-        while (*end && len < max_w) {
-            if (*end == L' ') last_space = end;
-            end++;
-            len++;
-        }
-        if (len >= max_w && *end && *end != L' ') {
-            if (last_space) end = last_space + 1;
-        }
-        if (end <= p) end = p + (int)wcslen(p);
+        const wchar_t *end = wrap_advance(p, max_w);
         int n = (int)(end - p);
         wchar_t line[256];
         int copy = n < (int)_countof(line) - 1 ? n : (int)_countof(line) - 1;
         wcsncpy_s(line, _countof(line), p, copy);
         line[copy] = L'\0';
         screen_text(screen, x, y + rows, line, attr);
-        p += n;
+        p = end;
         rows++;
     }
     return rows;
@@ -496,24 +513,24 @@ static void draw_help(Screen *screen)
     int placed_count = 0;
 
     for (int i = tui_state.help_scroll; i < page->entry_count; i++) {
-        int dlen = (int)wcslen(page->entries[i].desc);
-        int min_needed = dlen > desc_w ? 2 : 1;
-        int total_needed = (i > tui_state.help_scroll) ? min_needed + 1 : min_needed;
+        int need = wrapped_rows(page->entries[i].desc, desc_w);
+        int gap  = (i > tui_state.help_scroll) ? 1 : 0;
 
-        if (row + total_needed - 1 > iy1 - 2) {
-            if (i < page->entry_count - 1) tui_state.help_more_below = 1;
+        if (row + gap + need - 1 > iy1 - 2) {
+            /* This entry didn't fit, so there is content below the fold. */
+            tui_state.help_more_below = 1;
             break;
         }
 
-        if (i > tui_state.help_scroll) row++;
-
-        screen_text(screen, term_x, row, page->entries[i].term, s_attr_help_head);
-        int consumed = draw_wrapped(screen, desc_x, row, desc_w, page->entries[i].desc, s_attr_normal, 3);
-        row += consumed;
+        row += gap;
+        int start = row;
+        screen_text(screen, term_x, start, page->entries[i].term, s_attr_help_head);
+        draw_wrapped(screen, desc_x, start, desc_w, page->entries[i].desc, s_attr_normal, need);
+        row = start + need;
         placed_count++;
 
         if (i == tui_state.help_scroll && tui_state.help_scroll > 0) {
-            screen_put(screen, ix1, row - consumed, L'\x25B2', s_attr_border);
+            screen_put(screen, ix1, start, L'\x25B2', s_attr_border);
         }
     }
 
