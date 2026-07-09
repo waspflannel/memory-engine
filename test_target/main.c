@@ -9,9 +9,9 @@ static volatile float   target_speed   = 1.5f;
 static volatile double  target_gravity = 9.81;
 static volatile wchar_t target_name[]  = L"TestTarget";
 static volatile int     target_ammo    = 30;
-static volatile unsigned int target_counter_u32 = 4294967295u;  /* for u32 scan */
-static volatile long long    target_counter_i64 = 0x123456789ABCll;  /* for i64 scan */
-static volatile char        target_ascii_string[] = "MemForgeASCII";  /* for string ASCII scan */
+static volatile unsigned int target_counter_u32 = 4294967295u;
+static volatile long long    target_counter_i64 = 0x123456789ABCll;
+static volatile char        target_ascii_string[] = "MemForgeASCII";
 
 int main(void)
 {

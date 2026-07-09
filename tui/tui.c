@@ -14,7 +14,7 @@
 #define CONTENT_START   3
 
 #define INPUT_RECORD_BATCH 16
-#define SCANNER_LIST_ROWS 20  /* max result addresses drawn in the scanner panel */
+#define SCANNER_LIST_ROWS 20
 
 /* Box-drawing glyphs -- semantic roles, not Unicode code points */
 #define BOX_TL     L'\x250C'
@@ -28,9 +28,6 @@
 #define BOX_TTOP   L'\x252C'
 
 enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
-enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
-       PANEL_DISASM, PANEL_DEBUGGER, PANEL_SCRIPTS, PANEL_PROFILES,
-       PANEL_COUNT };
 
 static const wchar_t *s_sidebar_labels[PANEL_COUNT] = {
     L"Processes",
@@ -49,6 +46,9 @@ static const WORD s_attr_header = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND
 static const WORD s_attr_border = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
 static const WORD s_attr_error  = FOREGROUND_RED;
 
+static const WORD s_attr_help_head =
+    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+
 TuiState tui_state;
 
 /* Forward declarations -- definitions at bottom of file. */
@@ -60,6 +60,8 @@ static void draw_process_list(Screen *screen);
 static void draw_scanner_panel(Screen *screen);
 static void draw_main_panel(Screen *screen);
 static void draw_command(Screen *screen);
+static void draw_help(Screen *screen);
+static int  draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *text, WORD attr, int max_rows);
 static void render(void);
 static void handle_key(WORD vk, WCHAR ch);
 static void read_input(void);
@@ -106,6 +108,12 @@ int tui_init(void)
     tui_state.attached = FALSE;
     tui_state.scanner_inited = FALSE;
     tui_state.string_enc = 0;
+
+    tui_state.help_open = 0;
+    tui_state.help_tab = 0;
+    tui_state.help_scroll = 0;
+    tui_state.help_more_below = 0;
+    tui_state.help_book = NULL;
 
     tui_refresh_process_list();
 
@@ -264,6 +272,11 @@ static void draw_process_list(Screen *screen)
 
 static void draw_main_panel(Screen *screen)
 {
+    if (tui_state.help_open) {
+        draw_help(screen);
+        return;
+    }
+
     int sb_end = 1 + SIDEBAR_WIDTH;
     int main_x = sb_end + 1;
 
@@ -374,6 +387,144 @@ static void draw_command(Screen *screen)
     }
 }
 
+static int draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *text, WORD attr, int max_rows)
+{
+    int rows = 0;
+    const wchar_t *p = text;
+    while (*p && rows < max_rows) {
+        int len = 0;
+        const wchar_t *end = p;
+        while (*end && *end != L' ' && len < max_w) { end++; len++; }
+        if (len > max_w && end - p > (int)(unsigned int)max_w) {
+            end = p + max_w;
+        }
+        if (*end == L' ') end++;
+        if (end == p && *p == L' ') { p++; continue; }
+        if (end <= p) end = p + (int)wcslen(p);
+        int n = (int)(end - p);
+        wchar_t line[256];
+        int copy = n < (int)_countof(line) - 1 ? n : (int)_countof(line) - 1;
+        wcsncpy_s(line, _countof(line), p, copy);
+        line[copy] = L'\0';
+        screen_text(screen, x, y + rows, line, attr);
+        p += n;
+        rows++;
+    }
+    return rows;
+}
+
+static void draw_help(Screen *screen)
+{
+    const HelpBook *book = tui_state.help_book;
+    if (!book) return;
+
+    int x0 = 1 + SIDEBAR_WIDTH + 1;
+    int x1 = tui_state.width - 2;
+    int y0 = CONTENT_START;
+    int y1 = tui_state.height - 4;
+
+    int ix0 = x0 + 2;
+    int ix1 = x1 - 2;
+    int iw  = ix1 - ix0 + 1;
+    int iy0 = y0 + 1;
+    int iy1 = y1 - 1;
+
+    int visible_rows = (iy1 - 2) - (iy0 + 4) + 1;
+    if (iw < 40 || visible_rows < 3) {
+        screen_text(screen, (x0 + x1) / 2 - 15, (y0 + y1) / 2,
+                    L"Enlarge console for help (min 80x25)", s_attr_error);
+        return;
+    }
+
+    screen_put(screen, x0, y0, BOX_TL, s_attr_border);
+    for (int x = x0 + 1; x < x1; x++) screen_put(screen, x, y0, BOX_H, s_attr_border);
+    screen_put(screen, x1, y0, BOX_TR, s_attr_border);
+
+    wchar_t title_buf[128];
+    swprintf_s(title_buf, _countof(title_buf), L" %s ", book->book_title);
+    screen_text(screen, x0 + 2, y0, title_buf, s_attr_help_head);
+
+    for (int y = y0 + 1; y < y1; y++) {
+        screen_put(screen, x0, y, BOX_V, s_attr_border);
+        screen_put(screen, x1, y, BOX_V, s_attr_border);
+    }
+
+    screen_put(screen, x0, y1, BOX_BL, s_attr_border);
+    for (int x = x0 + 1; x < x1; x++) screen_put(screen, x, y1, BOX_H, s_attr_border);
+    screen_put(screen, x1, y1, BOX_BR, s_attr_border);
+
+    int tab_x = ix0 + 1;
+    for (int i = 0; i < book->page_count && tab_x < ix1; i++) {
+        int active = (i == tui_state.help_tab);
+        WORD tab_attr = active ? s_attr_sel : s_attr_normal;
+        wchar_t tab_line[128];
+        int tlen;
+        if (active) {
+            tlen = swprintf_s(tab_line, _countof(tab_line), L"\x25B8%s ", book->pages[i].title);
+        } else {
+            tlen = swprintf_s(tab_line, _countof(tab_line), L" %s  ", book->pages[i].title);
+        }
+        if (tab_x + tlen >= ix1) break;
+        screen_text(screen, tab_x, iy0, tab_line, tab_attr);
+        tab_x += tlen;
+    }
+
+    for (int x = ix0; x <= ix1; x++) screen_put(screen, x, iy0 + 1, BOX_H, s_attr_border);
+
+    const HelpPage *page = &book->pages[tui_state.help_tab];
+
+    if (page->intro) {
+        screen_text(screen, ix0 + 1, iy0 + 2, page->intro, s_attr_normal);
+    }
+
+    int term_w = 3;
+    for (int i = 0; i < page->entry_count; i++) {
+        int w = (int)wcslen(page->entries[i].term);
+        if (w > term_w) term_w = w;
+    }
+    if (term_w > 16) term_w = 16;
+
+    int term_x = ix0 + 1;
+    int desc_x = term_x + term_w + 1;
+    int desc_w = ix1 - desc_x + 1;
+
+    tui_state.help_more_below = 0;
+    int row = iy0 + 4;
+    int placed_count = 0;
+
+    for (int i = tui_state.help_scroll; i < page->entry_count; i++) {
+        int needed = 1;
+        int dlen = (int)wcslen(page->entries[i].desc);
+        if (dlen > desc_w) needed = 2;
+
+        if (row + needed - 1 > iy1 - 2) {
+            if (i < page->entry_count - 1) tui_state.help_more_below = 1;
+            break;
+        }
+
+        screen_text(screen, term_x, row, page->entries[i].term, s_attr_help_head);
+        int consumed = draw_wrapped(screen, desc_x, row, desc_w, page->entries[i].desc, s_attr_normal, 3);
+        row += consumed;
+        placed_count++;
+
+        if (i == tui_state.help_scroll && tui_state.help_scroll > 0) {
+            screen_put(screen, ix1, row - needed, L'\x25B2', s_attr_border);
+        }
+    }
+
+    if (tui_state.help_more_below && placed_count > 0) {
+        int last_row = row - 1;
+        if (last_row >= iy0 + 4 && last_row <= iy1 - 2) {
+            screen_put(screen, ix1, last_row, L'\x25BC', s_attr_border);
+        }
+    }
+
+    for (int x = ix0; x <= ix1; x++) screen_put(screen, x, iy1 - 1, BOX_H, s_attr_border);
+
+    screen_text(screen, ix0 + 1, iy1,
+                L"<-/->  Tab page    Up/Dn scroll    1-4 jump    Esc close", s_attr_border);
+}
+
 static void render(void)
 {
     Screen screen;
@@ -396,6 +547,37 @@ static void render(void)
 
 static void handle_key(WORD vk, WCHAR ch)
 {
+    if (tui_state.help_open) {
+        switch (vk) {
+        case VK_ESCAPE: tui_state.help_open = 0; break;
+        case VK_LEFT:
+            tui_state.help_scroll = 0;
+            if (tui_state.help_tab > 0) tui_state.help_tab--;
+            else tui_state.help_tab = tui_state.help_book ? tui_state.help_book->page_count - 1 : 0;
+            break;
+        case VK_RIGHT:
+        case VK_TAB:
+            tui_state.help_scroll = 0;
+            if (tui_state.help_book && tui_state.help_tab + 1 < tui_state.help_book->page_count) tui_state.help_tab++;
+            else tui_state.help_tab = 0;
+            break;
+        case VK_UP:    if (tui_state.help_scroll > 0) tui_state.help_scroll--; break;
+        case VK_DOWN:
+            if (tui_state.help_more_below) tui_state.help_scroll++;
+            break;
+        default:
+            if (ch >= L'1' && ch <= L'9' && tui_state.help_book) {
+                int p = ch - L'1';
+                if (p < tui_state.help_book->page_count) {
+                    tui_state.help_tab = p;
+                    tui_state.help_scroll = 0;
+                }
+            }
+            break;
+        }
+        return;
+    }
+
     switch (tui_state.focus) {
     case FOCUS_SIDEBAR:
         if (vk == VK_UP && tui_state.sidebar_idx > 0) {
@@ -424,6 +606,15 @@ static void handle_key(WORD vk, WCHAR ch)
             } else if (vk == VK_F5) {
                 tui_refresh_process_list();
                 tui_set_status(L"Process list refreshed", FALSE);
+            }
+        }
+        if (tui_state.panel == PANEL_SCANNER && ch == L'?') {
+            const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+            if (book) {
+                tui_state.help_book = book;
+                tui_state.help_open = 1;
+                tui_state.help_tab = 0;
+                tui_state.help_scroll = 0;
             }
         }
         if (vk == VK_ESCAPE) {

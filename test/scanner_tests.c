@@ -9,15 +9,6 @@
 #include "core/scanner/scanner.h"
 #include "core/memory/memory.h"
 
-/*
- * End-to-end scanner tests: spawn test_target.exe, attach, run real scans
- * against its published known values, and assert each type/mode/wildcard/
- * threading property from the phase-2 definition of done. This is the path
- * core_tests cannot cover (those run without an attached process). ctest
- * runs this test next to test_target.exe (CMake WORKING_DIRECTORY), so the
- * child resolves by bare executable name.
- */
-
 static int failures = 0;
 
 static void check(int cond, const char *msg)
@@ -61,10 +52,6 @@ static int parse_addr(const char *buf, const char *name, unsigned long long *out
 
 int main(void)
 {
-    /* Spawn test_target.exe with captured stdout so we can parse the addresses
-       of its published known values. The scanner can't attach to its own
-       process (the platform layer forbids self-open), so this child carries
-       the targets we scan against. */
     SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
     HANDLE out_r, out_w, in_r, in_w;
     if (!CreatePipe(&out_r, &out_w, &sa, 0) || !CreatePipe(&in_r, &in_w, &sa, 0)) {
@@ -72,14 +59,14 @@ int main(void)
         return 1;
     }
     SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
-    SetHandleInformation(in_w,  HANDLE_FLAG_INHERIT, 0);  /* we keep in_w; the child blocks on in_r forever */
+    SetHandleInformation(in_w,  HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOW si = {0};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = out_w;
     si.hStdError = out_w;
-    si.hStdInput = in_r;  /* inherited, write side stays alive with us -> child never hits EOF */
+    si.hStdInput = in_r;
     PROCESS_INFORMATION pi = {0};
 
     WCHAR cmd[] = L"test_target.exe";
@@ -88,8 +75,8 @@ int main(void)
         CloseHandle(out_r); CloseHandle(out_w); CloseHandle(in_r); CloseHandle(in_w);
         return 1;
     }
-    CloseHandle(out_w);  /* close our write end so reads terminate on EOF */
-    CloseHandle(in_r);   /* child has its read end; we hold in_w */
+    CloseHandle(out_w);
+    CloseHandle(in_r);
 
     char banner[8192];
     size_t filled = 0;
@@ -299,8 +286,6 @@ int main(void)
         check(find_addr(&s.results, name_addr), "UTF-16 string scan finds target_name");
         scanner_session_destroy(&s);
 
-        /* AOB: 'T','e' (4 bytes), then 4 wildcard bytes (2 '??' wide chars),
-           then 'T','t' -- should match exactly the start of target_name. */
         scanner_session_init(&s, &target, SCAN_TYPE_AOB, SCAN_MODE_EXACT);
         unsigned char pat[10]  = { 0x54,0x00, 0,0, 0,0, 0x74,0x00, 0x54,0x00 };
         unsigned char wild[10] = { 0,0,      1,1, 1,1, 0,0,      0,0 };

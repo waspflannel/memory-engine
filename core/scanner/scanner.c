@@ -4,24 +4,15 @@
 #include <threads.h>
 #include "core/scanner/scanner.h"
 
-/* Win32 region/state flags we validate against. Core does not include windows.h
-   (only platform/ does), so these constants are stated here as the values the
-   platform layer passes through unchecked. A drift between here and the SDK
-   would surface at runtime (we'd skip or include the wrong regions). */
+/* Duplicated Win32 values; the platform layer passes these through raw. */
 #define MEM_COMMIT      0x00001000u
 #define PAGE_NOACCESS   0x00000001u
 #define PAGE_GUARD      0x00000100u
 
-/* First-scan read chunk. The buffer and the count passed to memory_read stay
-   paired through this constant. */
 #define SCAN_CHUNK_BYTES 65536
 
-/* First-scan worker thread cap. Each worker scans its contiguous slice of the
-   region list and writes into its own ScanResults; the caller merges. */
 #define SCAN_MAX_THREADS 8
 
-/* One worker's slice of the first scan: its region subset + private result set.
-   Declared up here so the forward declarations below can name it. */
 typedef struct ScanWork {
     const ScanSession *session;
     const ScanRegion  *regions;
@@ -177,7 +168,6 @@ PlatformError scanner_first_scan(ScanSession *session)
         return err;
     }
 
-    /* Single-threaded path for small region sets; spawn workers otherwise. */
     int nthreads = 1;
     if (region_count >= 4) {
         nthreads = (int)(region_count < SCAN_MAX_THREADS ? region_count : SCAN_MAX_THREADS);
@@ -213,8 +203,6 @@ PlatformError scanner_first_scan(ScanSession *session)
         if (thrd_create(&tids[i], scan_worker, &works[i]) == thrd_success) {
             started[i] = 1;
         } else {
-            /* Couldn't spawn a thread -- run that slice inline so the scan still
-               completes; correctness does not depend on parallelism. */
             works[i].err = scan_regions(session, works[i].regions, works[i].count,
                                         works[i].width, works[i].snapshot, &works[i].results);
         }
@@ -260,8 +248,6 @@ PlatformError scanner_next_scan(ScanSession *session)
         return PLATFORM_ERR_INVALID_PARAM;  /* first-scan-only mode; pick a narrowing mode */
     }
     if (session->param.width == 0) {
-        /* Width is the byte size of the value we read and compare. Established by
-           the first scan; zero means it never ran (or no value for absolute modes). */
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
@@ -275,12 +261,9 @@ PlatformError scanner_next_scan(ScanSession *session)
         unsigned char       *prev = r->values + i * W;
         PlatformError rd = memory_read(session->target, addr, cur, W);
         if (rd != PLATFORM_OK) {
-            /* Target dropped this page since the last scan; drop the hit, don't fake. */
             continue;
         }
         if (keep_hit(session, cur, prev, W)) {
-            /* In-place compact: survivors <= i, so reads at indices [survivors, i]
-               are untouched. Update the address + last-seen value. */
             r->addresses[survivors] = addr;
             memcpy(r->values + survivors * W, cur, W);
             survivors++;
@@ -369,8 +352,6 @@ static int type_is_numeric(ScanType type)
 
 static int value_equals(const unsigned char *cur, const ScanValue *p)
 {
-    /* Fast-path the common case: a literal first byte rejects the vast majority
-       of offsets before we ever look at the rest. `??` (mask=1) skips the byte. */
     if (!p->wild[0] && cur[0] != p->bytes[0]) {
         return 0;
     }
@@ -382,13 +363,6 @@ static int value_equals(const unsigned char *cur, const ScanValue *p)
     return 1;
 }
 
-/*
- * Compare two raw-le byte buffers as the numeric type `type`. Returns -1 / 0 / 1
- * for a < b / == / a > b. For floats we return -2 on NaN so callers can drop
- * the hit (NaN fails every inc/dec/between test). String/AOB are non-numeric,
- * returned as -2 too -- the modes that call this guard against them at the TUI
- * boundary (only changed/unchanged/exact apply to AOB/string).
- */
 static int numeric_compare(ScanType type, const unsigned char *a, const unsigned char *b)
 {
     switch (type) {
@@ -421,7 +395,6 @@ static int numeric_compare(ScanType type, const unsigned char *a, const unsigned
     }
 }
 
-/* out = a +/- b interpreted as the numeric type. noop for non-numeric types. */
 static void numeric_add(ScanType type, const unsigned char *a, const unsigned char *b,
                         int sign, unsigned char *out)
 {
@@ -440,8 +413,6 @@ static void numeric_add(ScanType type, const unsigned char *a, const unsigned ch
     }
 }
 
-/* Apply the current scan-mode predicate to a freshly-read value vs the last-seen
-   value. Width ties the two buffers together (always param.width for the mode). */
 static int keep_hit(const ScanSession *session, const unsigned char *current,
                     const unsigned char *prev, size_t width)
 {
@@ -504,9 +475,6 @@ static int scan_results_append(ScanResults *results, unsigned long long address,
     return 1;
 }
 
-/* Scan a contiguous slice of the region list into `out`. The result array is
-   owned by the caller (init it first). A failed region read skips that region
-   and keeps going; never fakes zeros. */
 static PlatformError scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count,
                                    unsigned short width, int snapshot, ScanResults *out)
 {
@@ -550,8 +518,6 @@ static int scan_worker(void *arg)
     return 0;
 }
 
-/* Concatenate each worker's hits (in worker order) into a fresh pair of arrays,
-   freeing the per-worker buffers as we steal them. Caller owns the merged set. */
 static PlatformError merge_worker_results(ScanWork *works, int n, ScanResults *out)
 {
     size_t total = 0;
