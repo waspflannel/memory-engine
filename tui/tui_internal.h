@@ -13,6 +13,7 @@
 
 #include "core/process/process.h"
 #include "core/scanner/scanner.h"
+#include "tui/help.h"
 
 /* Sizes shared by the tui_state definition (tui.c) and the helpers that touch
    its buffers. Keep these here so the struct field width and the bound checks
@@ -20,6 +21,10 @@
 #define CMD_BUF_MAX        256
 #define STATUS_MSG_MAX     512
 #define MAX_STATUS_TICKS   3000
+
+enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
+       PANEL_DISASM, PANEL_DEBUGGER, PANEL_SCRIPTS, PANEL_PROFILES,
+       PANEL_COUNT };
 
 /* The TUI's module singleton. Defined in tui.c; the draw/input/commands code
    all borrow it. Named (not anonymous) so the extern below can name it. */
@@ -43,7 +48,13 @@ typedef struct {
 
     ScanSession scanner;
     int         scanner_inited;
-    int         string_enc;       /* SCAN_TYPE_STRING encoding: 0 = ASCII, 1 = UTF-16LE */
+    int         string_enc;
+
+    int             help_open;
+    int             help_tab;
+    int             help_scroll;
+    int             help_more_below;
+    const HelpBook *help_book;
 
     wchar_t cmd_buf[CMD_BUF_MAX];
     int     cmd_len;

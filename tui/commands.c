@@ -116,6 +116,20 @@ void tui_exec_command(void)
         return;
     }
 
+    if (wcscmp(tui_state.cmd_buf, L"help") == 0) {
+        const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+        if (!book) {
+            tui_set_status(L"No help for this panel", TRUE);
+        } else {
+            tui_state.help_book = book;
+            tui_state.help_open = 1;
+            tui_state.help_tab = 0;
+            tui_state.help_scroll = 0;
+        }
+        tui_state.cmd_len = 0;
+        return;
+    }
+
     wchar_t msg[256];
     swprintf_s(msg, _countof(msg), L"Unknown command: %s", tui_state.cmd_buf);
     tui_set_status(msg, TRUE);
