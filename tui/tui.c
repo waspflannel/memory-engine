@@ -361,7 +361,7 @@ static void draw_scanner_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > row) {
         screen_text(screen, main_x, help_row,
-                    L"cmds: type <name>  mode <name>  scan <v>|?  next <v>  scanclear  strenc ascii|utf16",
+                    L"cmds: type <name>  mode <name>  scan <v>|?  next <v>  scanclear  strenc ascii|utf16  ? help",
                     s_attr_border);
     }
 }
@@ -392,14 +392,17 @@ static int draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *
     int rows = 0;
     const wchar_t *p = text;
     while (*p && rows < max_rows) {
-        int len = 0;
         const wchar_t *end = p;
-        while (*end && *end != L' ' && len < max_w) { end++; len++; }
-        if (len > max_w && end - p > (int)(unsigned int)max_w) {
-            end = p + max_w;
+        const wchar_t *last_space = NULL;
+        int len = 0;
+        while (*end && len < max_w) {
+            if (*end == L' ') last_space = end;
+            end++;
+            len++;
         }
-        if (*end == L' ') end++;
-        if (end == p && *p == L' ') { p++; continue; }
+        if (len >= max_w && *end && *end != L' ') {
+            if (last_space) end = last_space + 1;
+        }
         if (end <= p) end = p + (int)wcslen(p);
         int n = (int)(end - p);
         wchar_t line[256];
@@ -493,14 +496,16 @@ static void draw_help(Screen *screen)
     int placed_count = 0;
 
     for (int i = tui_state.help_scroll; i < page->entry_count; i++) {
-        int needed = 1;
         int dlen = (int)wcslen(page->entries[i].desc);
-        if (dlen > desc_w) needed = 2;
+        int min_needed = dlen > desc_w ? 2 : 1;
+        int total_needed = (i > tui_state.help_scroll) ? min_needed + 1 : min_needed;
 
-        if (row + needed - 1 > iy1 - 2) {
+        if (row + total_needed - 1 > iy1 - 2) {
             if (i < page->entry_count - 1) tui_state.help_more_below = 1;
             break;
         }
+
+        if (i > tui_state.help_scroll) row++;
 
         screen_text(screen, term_x, row, page->entries[i].term, s_attr_help_head);
         int consumed = draw_wrapped(screen, desc_x, row, desc_w, page->entries[i].desc, s_attr_normal, 3);
@@ -508,7 +513,7 @@ static void draw_help(Screen *screen)
         placed_count++;
 
         if (i == tui_state.help_scroll && tui_state.help_scroll > 0) {
-            screen_put(screen, ix1, row - needed, L'\x25B2', s_attr_border);
+            screen_put(screen, ix1, row - consumed, L'\x25B2', s_attr_border);
         }
     }
 
