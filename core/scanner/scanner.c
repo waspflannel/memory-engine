@@ -352,8 +352,10 @@ static PlatformError match_regions(const ScanSession *session, const ScanRegion 
 {
     const size_t W = width;
     const ScanValue *want = &session->param;
-    unsigned char buf[SCAN_CHUNK_BYTES];
+    unsigned char *buf = (unsigned char *)malloc(SCAN_CHUNK_BYTES);
+    if (!buf) return PLATFORM_ERR_INTERNAL;
 
+    PlatformError result = PLATFORM_OK;
     for (size_t r = 0; r < count; r++) {
         unsigned long long addr = regions[r].base;
         size_t remaining = regions[r].size;
@@ -362,7 +364,7 @@ static PlatformError match_regions(const ScanSession *session, const ScanRegion 
             size_t take = remaining < SCAN_CHUNK_BYTES ? remaining : SCAN_CHUNK_BYTES;
             PlatformError rd = memory_read(session->target, addr, buf, take);
             if (rd != PLATFORM_OK) {
-                break;  /* per-region failure: skip the rest of this region */
+                break;
             }
 
             size_t last = take - W;
@@ -371,7 +373,8 @@ static PlatformError match_regions(const ScanSession *session, const ScanRegion 
                     continue;
                 }
                 if (!append_hit(out, addr + off, buf + off, W)) {
-                    return PLATFORM_ERR_INTERNAL;
+                    result = PLATFORM_ERR_INTERNAL;
+                    goto done;
                 }
             }
 
@@ -380,7 +383,9 @@ static PlatformError match_regions(const ScanSession *session, const ScanRegion 
             remaining -= advance;
         }
     }
-    return PLATFORM_OK;
+done:
+    free(buf);
+    return result;
 }
 
 static int worker_fn(void *arg)
