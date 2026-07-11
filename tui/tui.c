@@ -410,9 +410,9 @@ static void draw_address_table_panel(Screen *screen)
 
     AddrTable *table = &tui_state.address_table;
 
-    if (!tui_state.attached) {
-        screen_text(screen, main_x, CONTENT_START, L"Attach to a process first to view live values", s_attr_normal);
-    } else if (table->count == 0) {
+    if (!tui_state.attached && table->count == 0) {
+        screen_text(screen, main_x, CONTENT_START, L"Attach to a process first to add addresses", s_attr_normal);
+    } else if (tui_state.attached && table->count == 0) {
         screen_text(screen, main_x, CONTENT_START,
                     L"No saved addresses -- use `addentry <addr> <type> <label>`,", s_attr_normal);
         screen_text(screen, main_x, CONTENT_START + 1,
