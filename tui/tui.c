@@ -3,20 +3,20 @@
 #define _UNICODE
 #include <windows.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <wchar.h>
 
 #include "tui/render.h"
-#include "core/process/process.h"
-#include "core/memory/memory.h"
+#include "tui_internal.h"
 
 #define SIDEBAR_WIDTH   12
 #define HEADER_ROW      1
 #define SEP1_ROW        2
 #define CONTENT_START   3
-#define MAX_STATUS_TICKS 3000
 
-/* Box-drawing glyphs — semantic roles, not Unicode code points */
+#define INPUT_RECORD_BATCH 16
+#define SCANNER_LIST_ROWS 20
+
+/* Box-drawing glyphs -- semantic roles, not Unicode code points */
 #define BOX_TL     L'\x250C'
 #define BOX_TR     L'\x2510'
 #define BOX_BL     L'\x2514'
@@ -27,19 +27,7 @@
 #define BOX_TRIGHT L'\x2524'
 #define BOX_TTOP   L'\x252C'
 
-/* Command-prefix lengths, coupled to their literals in exec_command */
-#define CMD_ATTACH_PREFIX 7  /* length of L"attach " */
-#define CMD_READ_PREFIX   5  /* length of L"read "   */
-#define CMD_WRITE_PREFIX  6  /* length of L"write "  */
-
-#define CMD_BUF_MAX    256
-#define STATUS_MSG_MAX 512
-#define INPUT_RECORD_BATCH 16
-
 enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
-enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
-       PANEL_DISASM, PANEL_DEBUGGER, PANEL_SCRIPTS, PANEL_PROFILES,
-       PANEL_COUNT };
 
 static const wchar_t *s_sidebar_labels[PANEL_COUNT] = {
     L"Processes",
@@ -53,59 +41,28 @@ static const wchar_t *s_sidebar_labels[PANEL_COUNT] = {
 };
 
 static const WORD s_attr_normal = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-
-static const WORD s_attr_sel = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED;
-
+static const WORD s_attr_sel    = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED;
 static const WORD s_attr_header = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-
 static const WORD s_attr_border = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+static const WORD s_attr_error  = FOREGROUND_RED;
 
-static const WORD s_attr_error = FOREGROUND_RED;
+static const WORD s_attr_help_head =
+    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
 
-static struct {
-    HANDLE hOut;
-    HANDLE hIn;
-    int    width;
-    int    height;
+TuiState tui_state;
 
-    int focus;
-    int panel;
-    int sidebar_idx;
-
-    ProcessEntry *processes;
-    unsigned int   process_count;
-    int            selected_process;
-    int            process_scroll;
-
-    Target  target;
-    int     attached;
-
-    wchar_t cmd_buf[CMD_BUF_MAX];
-    int     cmd_len;
-
-    wchar_t   status_msg[STATUS_MSG_MAX];
-    int       status_error;
-    ULONGLONG status_ticks;
-
-    int running;
-} tui_state;
-
-/* Forward declarations — definitions at bottom of file. */
+/* Forward declarations -- definitions at bottom of file. */
 static void draw_borders(Screen *screen);
 static void draw_sep_row(Screen *screen, int y, int split);
 static void draw_header(Screen *screen);
 static void draw_sidebar(Screen *screen);
 static void draw_process_list(Screen *screen);
+static void draw_scanner_panel(Screen *screen);
 static void draw_main_panel(Screen *screen);
 static void draw_command(Screen *screen);
+static void draw_help(Screen *screen);
+static int  draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *text, WORD attr, int max_rows);
 static void render(void);
-static void set_status(const wchar_t *msg, int is_error);
-static void refresh_process_list(void);
-static int  do_attach(DWORD pid);
-static void attach_to_selected(void);
-static void cmd_read(const wchar_t *args);
-static void cmd_write(const wchar_t *args);
-static void exec_command(void);
 static void handle_key(WORD vk, WCHAR ch);
 static void read_input(void);
 
@@ -149,8 +106,16 @@ int tui_init(void)
 
     memset(&tui_state.target, 0, sizeof(tui_state.target));
     tui_state.attached = FALSE;
+    tui_state.scanner_inited = FALSE;
+    tui_state.string_enc = 0;
 
-    refresh_process_list();
+    tui_state.help_open = 0;
+    tui_state.help_tab = 0;
+    tui_state.help_scroll = 0;
+    tui_state.help_more_below = 0;
+    tui_state.help_book = NULL;
+
+    tui_refresh_process_list();
 
     return 0;
 }
@@ -176,6 +141,10 @@ void tui_shutdown(void)
     SetConsoleMode(tui_state.hIn, mode);
 
     if (tui_state.attached) {
+        if (tui_state.scanner_inited) {
+            scanner_session_destroy(&tui_state.scanner);
+            tui_state.scanner_inited = FALSE;
+        }
         process_detach(&tui_state.target);
         tui_state.attached = FALSE;
     }
@@ -303,6 +272,11 @@ static void draw_process_list(Screen *screen)
 
 static void draw_main_panel(Screen *screen)
 {
+    if (tui_state.help_open) {
+        draw_help(screen);
+        return;
+    }
+
     int sb_end = 1 + SIDEBAR_WIDTH;
     int main_x = sb_end + 1;
 
@@ -312,8 +286,83 @@ static void draw_main_panel(Screen *screen)
         } else {
             screen_text(screen, main_x, CONTENT_START, L"Loading process list...", s_attr_normal);
         }
+    } else if (tui_state.panel == PANEL_SCANNER) {
+        draw_scanner_panel(screen);
     } else {
         screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", s_attr_normal);
+    }
+}
+
+static void draw_scanner_panel(Screen *screen)
+{
+    int sb_end = 1 + SIDEBAR_WIDTH;
+    int main_x = sb_end + 1;
+
+    if (!tui_state.attached) {
+        screen_text(screen, main_x, CONTENT_START, L"Attach to a process first (Processes panel, or `attach <pid>`)", s_attr_normal);
+        return;
+    }
+
+    ScanSession *s = &tui_state.scanner;
+    wchar_t line[160];
+    int row = CONTENT_START;
+
+    const wchar_t *enc = s->param.type == SCAN_TYPE_STRING
+        ? (tui_state.string_enc == 1 ? L"utf16" : L"ascii") : L"-";
+    swprintf_s(line, _countof(line), L"Scanner -- type: %s  mode: %s  enc: %s",
+               tui_scan_type_name(s->param.type), tui_scan_mode_name(s->mode), enc);
+    screen_text(screen, main_x, row++, line, s_attr_normal);
+
+    /* Hex byte dump of the current param (works for every type). */
+    wchar_t hex[160];
+    int pos = swprintf_s(hex, _countof(hex), L"value(hex): ");
+    unsigned short shown = s->param.width > 16 ? 16 : s->param.width;
+    for (unsigned short i = 0; i < shown && pos + 4 < (int)_countof(hex); i++) {
+        if (s->param.wild[i]) {
+            pos += swprintf_s(hex + pos, _countof(hex) - pos, L"?? ");
+        } else {
+            pos += swprintf_s(hex + pos, _countof(hex) - pos, L"%02X ", s->param.bytes[i]);
+        }
+    }
+    if (s->param.width > 16) {
+        pos += swprintf_s(hex + pos, _countof(hex) - pos, L"...");
+    }
+    swprintf_s(line, _countof(line), L"%s  results: %llu", hex, (unsigned long long)s->results.count);
+    screen_text(screen, main_x, row++, line, s_attr_normal);
+
+    row++;  /* blank separator */
+
+    if (!s->has_results) {
+        screen_text(screen, main_x, row, L"Run `scan <value>` to find (use `type <name>` to pick type)", s_attr_normal);
+    } else if (s->results.count == 0) {
+        screen_text(screen, main_x, row, L"No survivors -- try a different value or run `scan` again", s_attr_error);
+    } else {
+        wchar_t addrs[160];
+        unsigned short w = s->results.value_width;
+        unsigned short shown_w = w > 16 ? 16 : w;
+        for (size_t i = 0; i < s->results.count && i < SCANNER_LIST_ROWS; i++) {
+            const unsigned char *val = s->results.values + i * w;
+            int p = swprintf_s(addrs, _countof(addrs), L"  0x%016llX  ", s->results.addresses[i]);
+            for (unsigned short k = 0; k < shown_w && p + 4 < (int)_countof(addrs); k++) {
+                p += swprintf_s(addrs + p, _countof(addrs) - p, L"%02X ", val[k]);
+            }
+            if (w > 16) {
+                p += swprintf_s(addrs + p, _countof(addrs) - p, L"...");
+            }
+            screen_text(screen, main_x, row++, addrs, s_attr_normal);
+        }
+        if (s->results.count > SCANNER_LIST_ROWS) {
+            swprintf_s(addrs, _countof(addrs), L"  ... (%llu more)",
+                       (unsigned long long)(s->results.count - SCANNER_LIST_ROWS));
+            screen_text(screen, main_x, row++, addrs, s_attr_border);
+        }
+    }
+
+    int help_row = tui_state.height - 4;
+    if (help_row > row) {
+        screen_text(screen, main_x, help_row,
+                    L"cmds: type <name>  scan <v>  next <v>  strenc ascii|utf16  ? help",
+                    s_attr_border);
     }
 }
 
@@ -323,11 +372,10 @@ static void draw_command(Screen *screen)
 
     wchar_t display[STATUS_MSG_MAX];
     if (tui_state.status_msg[0] && (GetTickCount64() - tui_state.status_ticks) < MAX_STATUS_TICKS) {
-        swprintf_s(display, STATUS_MSG_MAX, L" %s", tui_state.status_msg); //set display to error message
-        WORD attr = tui_state.status_error ? s_attr_error : s_attr_normal; // get right styling
-        screen_text(screen, 1, cmd_row, display, attr); //display message with right styling
+        swprintf_s(display, STATUS_MSG_MAX, L" %s", tui_state.status_msg);
+        WORD attr = tui_state.status_error ? s_attr_error : s_attr_normal;
+        screen_text(screen, 1, cmd_row, display, attr);
     } else {
-		// if no status message or expired, display the command buffer
         swprintf_s(display, STATUS_MSG_MAX, L" > %s", tui_state.cmd_buf);
         WORD attr;
         if (tui_state.focus == FOCUS_COMMAND) {
@@ -337,6 +385,166 @@ static void draw_command(Screen *screen)
         }
         screen_text(screen, 1, cmd_row, display, attr);
     }
+}
+
+/* Advance past exactly one wrapped line of `text` at `max_w` columns and return
+   the start of the next line. Breaks after the last space that fits; hard-splits
+   a single word longer than max_w. */
+static const wchar_t *wrap_advance(const wchar_t *p, int max_w)
+{
+    const wchar_t *end = p;
+    const wchar_t *last_space = NULL;
+    int len = 0;
+    while (*end && len < max_w) {
+        if (*end == L' ') last_space = end;
+        end++;
+        len++;
+    }
+    if (len >= max_w && *end && *end != L' ' && last_space) {
+        end = last_space + 1;
+    }
+    if (end <= p) end = p + (int)wcslen(p);
+    return end;
+}
+
+/* Number of lines `text` wraps to at `max_w` columns (at least 1). */
+static int wrapped_rows(const wchar_t *text, int max_w)
+{
+    int rows = 0;
+    for (const wchar_t *p = text; *p; p = wrap_advance(p, max_w)) rows++;
+    return rows > 0 ? rows : 1;
+}
+
+static int draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *text, WORD attr, int max_rows)
+{
+    int rows = 0;
+    const wchar_t *p = text;
+    while (*p && rows < max_rows) {
+        const wchar_t *end = wrap_advance(p, max_w);
+        int n = (int)(end - p);
+        wchar_t line[256];
+        int copy = n < (int)_countof(line) - 1 ? n : (int)_countof(line) - 1;
+        wcsncpy_s(line, _countof(line), p, copy);
+        line[copy] = L'\0';
+        screen_text(screen, x, y + rows, line, attr);
+        p = end;
+        rows++;
+    }
+    return rows;
+}
+
+static void draw_help(Screen *screen)
+{
+    const HelpBook *book = tui_state.help_book;
+    if (!book) return;
+
+    int x0 = 1 + SIDEBAR_WIDTH + 1;
+    int x1 = tui_state.width - 2;
+    int y0 = CONTENT_START;
+    int y1 = tui_state.height - 4;
+
+    int ix0 = x0 + 2;
+    int ix1 = x1 - 2;
+    int iw  = ix1 - ix0 + 1;
+    int iy0 = y0 + 1;
+    int iy1 = y1 - 1;
+
+    int visible_rows = (iy1 - 2) - (iy0 + 4) + 1;
+    if (iw < 40 || visible_rows < 3) {
+        screen_text(screen, (x0 + x1) / 2 - 15, (y0 + y1) / 2,
+                    L"Enlarge console for help (min 80x25)", s_attr_error);
+        return;
+    }
+
+    screen_put(screen, x0, y0, BOX_TL, s_attr_border);
+    for (int x = x0 + 1; x < x1; x++) screen_put(screen, x, y0, BOX_H, s_attr_border);
+    screen_put(screen, x1, y0, BOX_TR, s_attr_border);
+
+    wchar_t title_buf[128];
+    swprintf_s(title_buf, _countof(title_buf), L" %s ", book->book_title);
+    screen_text(screen, x0 + 2, y0, title_buf, s_attr_help_head);
+
+    for (int y = y0 + 1; y < y1; y++) {
+        screen_put(screen, x0, y, BOX_V, s_attr_border);
+        screen_put(screen, x1, y, BOX_V, s_attr_border);
+    }
+
+    screen_put(screen, x0, y1, BOX_BL, s_attr_border);
+    for (int x = x0 + 1; x < x1; x++) screen_put(screen, x, y1, BOX_H, s_attr_border);
+    screen_put(screen, x1, y1, BOX_BR, s_attr_border);
+
+    int tab_x = ix0 + 1;
+    for (int i = 0; i < book->page_count && tab_x < ix1; i++) {
+        int active = (i == tui_state.help_tab);
+        WORD tab_attr = active ? s_attr_sel : s_attr_normal;
+        wchar_t tab_line[128];
+        int tlen;
+        if (active) {
+            tlen = swprintf_s(tab_line, _countof(tab_line), L"\x25B8%s ", book->pages[i].title);
+        } else {
+            tlen = swprintf_s(tab_line, _countof(tab_line), L" %s  ", book->pages[i].title);
+        }
+        if (tab_x + tlen >= ix1) break;
+        screen_text(screen, tab_x, iy0, tab_line, tab_attr);
+        tab_x += tlen;
+    }
+
+    for (int x = ix0; x <= ix1; x++) screen_put(screen, x, iy0 + 1, BOX_H, s_attr_border);
+
+    const HelpPage *page = &book->pages[tui_state.help_tab];
+
+    if (page->intro) {
+        screen_text(screen, ix0 + 1, iy0 + 2, page->intro, s_attr_normal);
+    }
+
+    int term_w = 3;
+    for (int i = 0; i < page->entry_count; i++) {
+        int w = (int)wcslen(page->entries[i].term);
+        if (w > term_w) term_w = w;
+    }
+    if (term_w > 16) term_w = 16;
+
+    int term_x = ix0 + 1;
+    int desc_x = term_x + term_w + 1;
+    int desc_w = ix1 - desc_x + 1;
+
+    tui_state.help_more_below = 0;
+    int row = iy0 + 4;
+    int placed_count = 0;
+
+    for (int i = tui_state.help_scroll; i < page->entry_count; i++) {
+        int need = wrapped_rows(page->entries[i].desc, desc_w);
+        int gap  = (i > tui_state.help_scroll) ? 1 : 0;
+
+        if (row + gap + need - 1 > iy1 - 2) {
+            /* This entry didn't fit, so there is content below the fold. */
+            tui_state.help_more_below = 1;
+            break;
+        }
+
+        row += gap;
+        int start = row;
+        screen_text(screen, term_x, start, page->entries[i].term, s_attr_help_head);
+        draw_wrapped(screen, desc_x, start, desc_w, page->entries[i].desc, s_attr_normal, need);
+        row = start + need;
+        placed_count++;
+
+        if (i == tui_state.help_scroll && tui_state.help_scroll > 0) {
+            screen_put(screen, ix1, start, L'\x25B2', s_attr_border);
+        }
+    }
+
+    if (tui_state.help_more_below && placed_count > 0) {
+        int last_row = row - 1;
+        if (last_row >= iy0 + 4 && last_row <= iy1 - 2) {
+            screen_put(screen, ix1, last_row, L'\x25BC', s_attr_border);
+        }
+    }
+
+    for (int x = ix0; x <= ix1; x++) screen_put(screen, x, iy1 - 1, BOX_H, s_attr_border);
+
+    screen_text(screen, ix0 + 1, iy1,
+                L"<-/->  Tab page    Up/Dn scroll    1-4 jump    Esc close", s_attr_border);
 }
 
 static void render(void)
@@ -357,196 +565,41 @@ static void render(void)
     screen_free(&screen);
 }
 
-/* ---- Static helpers: app state + actions ---- */
-
-static void set_status(const wchar_t *msg, int is_error)
-{
-    wcsncpy_s(tui_state.status_msg, STATUS_MSG_MAX, msg, _TRUNCATE);
-    tui_state.status_error = is_error;
-    tui_state.status_ticks = GetTickCount64();
-}
-
-static void refresh_process_list(void)
-{
-    if (tui_state.processes) {
-        process_free_list(tui_state.processes);
-        tui_state.processes = NULL;
-    }
-    tui_state.process_count = 0;
-    tui_state.selected_process   = 0;
-    tui_state.process_scroll = 0;
-
-    PlatformError err = process_list(&tui_state.processes, &tui_state.process_count);
-    if (err != PLATFORM_OK) {
-        set_status(L"Failed to list processes", TRUE);
-    }
-}
-
-static int do_attach(DWORD pid)
-{
-    if (tui_state.attached) {
-        process_detach(&tui_state.target);
-        tui_state.attached = FALSE;
-    }
-
-    process_enable_privilege();
-
-    PlatformError err = process_attach(pid, &tui_state.target);
-    if (err != PLATFORM_OK) {
-        wchar_t msg[512];
-        swprintf_s(msg, _countof(msg), L"Failed to attach to PID %u: %S", pid, process_error_string(err));
-        set_status(msg, TRUE);
-        return 0;
-    }
-
-    tui_state.attached = TRUE;
-    wchar_t msg[PROCESS_NAME_MAX + 32];
-    swprintf_s(msg, _countof(msg), L"Attached to %s (PID %u)", tui_state.target.name, pid);
-    set_status(msg, FALSE);
-    return 1;
-}
-
-static void attach_to_selected(void)
-{
-    if (!tui_state.processes || tui_state.process_count == 0) return;
-    if ((unsigned int)tui_state.selected_process >= tui_state.process_count) return;
-
-    do_attach(tui_state.processes[tui_state.selected_process].pid);
-}
-
-static void cmd_read(const wchar_t *args)
-{
-    if (!tui_state.attached) {
-        set_status(L"No process attached", TRUE);
-        return;
-    }
-
-    unsigned long long address = 0;
-    int size = 0;
-    if (swscanf_s(args, L"%llx %d", &address, &size) != 2 || size <= 0 || size > 512) {
-        set_status(L"usage: read <hex_address> <size_in_bytes>", TRUE);
-        return;
-    }
-
-    unsigned char buf[512];
-    PlatformError err = memory_read(&tui_state.target, address, buf, (size_t)size);
-    if (err != PLATFORM_OK) {
-        wchar_t msg[256];
-        swprintf_s(msg, _countof(msg), L"read failed: %S", process_error_string(err));
-        set_status(msg, TRUE);
-        return;
-    }
-
-    wchar_t result[512];
-    int pos = 0;
-    for (int i = 0; i < size && pos < 500; i++) {
-        pos += swprintf_s(result + pos, 512 - pos, L"%02X ", buf[i]);
-    }
-    set_status(result, FALSE);
-}
-
-static void cmd_write(const wchar_t *args)
-{
-    if (!tui_state.attached) {
-        set_status(L"No process attached", TRUE);
-        return;
-    }
-
-    unsigned long long address = 0;
-    wchar_t hex[256] = {0};
-    if (swscanf_s(args, L"%llx %s", &address, hex, (unsigned int)(sizeof(hex) / sizeof(wchar_t))) != 2) {
-        set_status(L"usage: write <hex_address> <hex_bytes>", TRUE);
-        return;
-    }
-
-    unsigned char buf[128];
-    int hex_len = (int)wcslen(hex);
-    int byte_count = hex_len / 2;
-    if (byte_count == 0 || byte_count > 128 || hex_len % 2 != 0) {
-        set_status(L"invalid hex string — even number of hex chars required", TRUE);
-        return;
-    }
-
-    for (int i = 0; i < hex_len; i++) {
-        wchar_t c = hex[i];
-        if (!((c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F') || (c >= L'a' && c <= L'f'))) {
-            set_status(L"invalid hex string — non-hex characters found", TRUE);
-            return;
-        }
-    }
-
-    for (int i = 0; i < byte_count; i++) {
-        swscanf_s(hex + (i * 2), L"%2hhx", &buf[i]);
-    }
-
-    PlatformError err = memory_write(&tui_state.target, address, buf, (size_t)byte_count);
-    if (err != PLATFORM_OK) {
-        wchar_t msg[256];
-        swprintf_s(msg, _countof(msg), L"write failed: %S", process_error_string(err));
-        set_status(msg, TRUE);
-        return;
-    }
-
-    wchar_t msg[256];
-    swprintf_s(msg, _countof(msg), L"Wrote %d byte(s) to 0x%llX", byte_count, address);
-    set_status(msg, FALSE);
-}
-
-static void exec_command(void)
-{
-    if (tui_state.cmd_len == 0) return;
-
-    if (wcscmp(tui_state.cmd_buf, L"quit") == 0 || wcscmp(tui_state.cmd_buf, L"exit") == 0) {
-        tui_state.running = FALSE;
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"attach ", CMD_ATTACH_PREFIX) == 0) {
-        DWORD pid = (DWORD)_wtol(tui_state.cmd_buf + CMD_ATTACH_PREFIX);
-        if (pid == 0) {
-            set_status(L"Invalid PID", TRUE);
-        } else {
-            do_attach(pid);
-        }
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcscmp(tui_state.cmd_buf, L"detach") == 0) {
-        if (tui_state.attached) {
-            process_detach(&tui_state.target);
-            tui_state.attached = FALSE;
-            set_status(L"Detached", FALSE);
-        } else {
-            set_status(L"No process attached", TRUE);
-        }
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"read ", CMD_READ_PREFIX) == 0) {
-        cmd_read(tui_state.cmd_buf + CMD_READ_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"write ", CMD_WRITE_PREFIX) == 0) {
-        cmd_write(tui_state.cmd_buf + CMD_WRITE_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    wchar_t msg[256];
-    swprintf_s(msg, _countof(msg), L"Unknown command: %s", tui_state.cmd_buf);
-    set_status(msg, TRUE);
-    tui_state.cmd_len = 0;
-}
-
 /* ---- Static helpers: input ---- */
 
 static void handle_key(WORD vk, WCHAR ch)
 {
+    if (tui_state.help_open) {
+        switch (vk) {
+        case VK_ESCAPE: tui_state.help_open = 0; break;
+        case VK_LEFT:
+            tui_state.help_scroll = 0;
+            if (tui_state.help_tab > 0) tui_state.help_tab--;
+            else tui_state.help_tab = tui_state.help_book ? tui_state.help_book->page_count - 1 : 0;
+            break;
+        case VK_RIGHT:
+        case VK_TAB:
+            tui_state.help_scroll = 0;
+            if (tui_state.help_book && tui_state.help_tab + 1 < tui_state.help_book->page_count) tui_state.help_tab++;
+            else tui_state.help_tab = 0;
+            break;
+        case VK_UP:    if (tui_state.help_scroll > 0) tui_state.help_scroll--; break;
+        case VK_DOWN:
+            if (tui_state.help_more_below) tui_state.help_scroll++;
+            break;
+        default:
+            if (ch >= L'1' && ch <= L'9' && tui_state.help_book) {
+                int p = ch - L'1';
+                if (p < tui_state.help_book->page_count) {
+                    tui_state.help_tab = p;
+                    tui_state.help_scroll = 0;
+                }
+            }
+            break;
+        }
+        return;
+    }
+
     switch (tui_state.focus) {
     case FOCUS_SIDEBAR:
         if (vk == VK_UP && tui_state.sidebar_idx > 0) {
@@ -571,10 +624,19 @@ static void handle_key(WORD vk, WCHAR ch)
                 int vis_rows = (tui_state.height - 3) - CONTENT_START;
                 if (tui_state.selected_process >= tui_state.process_scroll + vis_rows) tui_state.process_scroll = tui_state.selected_process - vis_rows + 1;
             } else if (vk == VK_RETURN) {
-                attach_to_selected();
+                tui_attach_to_selected();
             } else if (vk == VK_F5) {
-                refresh_process_list();
-                set_status(L"Process list refreshed", FALSE);
+                tui_refresh_process_list();
+                tui_set_status(L"Process list refreshed", FALSE);
+            }
+        }
+        if (tui_state.panel == PANEL_SCANNER && ch == L'?') {
+            const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+            if (book) {
+                tui_state.help_book = book;
+                tui_state.help_open = 1;
+                tui_state.help_tab = 0;
+                tui_state.help_scroll = 0;
             }
         }
         if (vk == VK_ESCAPE) {
@@ -584,7 +646,7 @@ static void handle_key(WORD vk, WCHAR ch)
 
     case FOCUS_COMMAND:
         if (vk == VK_RETURN) {
-            exec_command();
+            tui_exec_command();
         } else if (vk == VK_BACK) {
             if (tui_state.cmd_len > 0) tui_state.cmd_buf[--tui_state.cmd_len] = L'\0';
         } else if (vk == VK_ESCAPE) {
