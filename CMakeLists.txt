@@ -15,6 +15,7 @@ add_executable(memforge
     core/process/process.c
     core/memory/memory.c
     core/scanner/scanner.c
+    core/address_table/address_table.c
     platform/platform.c
 )
 
