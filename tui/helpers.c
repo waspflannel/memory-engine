@@ -3,6 +3,7 @@
 #define _UNICODE
 #include <windows.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <wchar.h>
 
 #include "tui_internal.h"
@@ -10,8 +11,6 @@
 /* Forward declarations — definitions at bottom of file. */
 static int parse_aob_value(const wchar_t *args, ScanValue *out);
 static int parse_string_value(const wchar_t *args, ScanValue *out);
-static void set_int_value(ScanValue *v, ScanType type, int x);
-static void set_uint_value(ScanValue *v, ScanType type, unsigned int x);
 static int is_hex_wchar(wchar_t c);
 static int hex_wchar_value(wchar_t c);
 
@@ -100,16 +99,8 @@ const wchar_t *tui_scan_type_name(ScanType type)
 const wchar_t *tui_scan_mode_name(ScanMode mode)
 {
     switch (mode) {
-    case SCAN_MODE_EXACT:        return L"exact";
-    case SCAN_MODE_CHANGED:      return L"changed";
-    case SCAN_MODE_UNCHANGED:    return L"unchanged";
-    case SCAN_MODE_INCREASED:    return L"increased";
-    case SCAN_MODE_DECREASED:    return L"decreased";
-    case SCAN_MODE_INCREASED_BY: return L"increasedby";
-    case SCAN_MODE_DECREASED_BY: return L"decreasedby";
-    case SCAN_MODE_BETWEEN:      return L"between";
-    case SCAN_MODE_UNKNOWN_INITIAL: return L"unknown";
-    default:                     return L"?";
+    case SCAN_MODE_EXACT: return L"exact";
+    default:              return L"?";
     }
 }
 
@@ -121,7 +112,9 @@ int tui_parse_scan_value(const wchar_t *args, ScanValue *out)
     case SCAN_TYPE_I32: {
         int x = 0;
         if (swscanf_s(args, L"%d", &x) != 1) return 0;
-        set_int_value(out, out->type, x);
+        if (out->type == SCAN_TYPE_I8  && (x < INT8_MIN  || x > INT8_MAX))  return 0;
+        if (out->type == SCAN_TYPE_I16 && (x < INT16_MIN || x > INT16_MAX)) return 0;
+        scanner_value_set(out, out->type, &x, sizeof(x));
         return 1;
     }
     case SCAN_TYPE_I64: {
@@ -135,7 +128,9 @@ int tui_parse_scan_value(const wchar_t *args, ScanValue *out)
     case SCAN_TYPE_U32: {
         unsigned int x = 0;
         if (swscanf_s(args, L"%u", &x) != 1) return 0;
-        set_uint_value(out, out->type, x);
+        if (out->type == SCAN_TYPE_U8  && x > UINT8_MAX)  return 0;
+        if (out->type == SCAN_TYPE_U16 && x > UINT16_MAX) return 0;
+        scanner_value_set(out, out->type, &x, sizeof(x));
         return 1;
     }
     case SCAN_TYPE_U64: {
@@ -159,60 +154,6 @@ int tui_parse_scan_value(const wchar_t *args, ScanValue *out)
     case SCAN_TYPE_STRING: return parse_string_value(args, out);
     case SCAN_TYPE_AOB:    return parse_aob_value(args, out);
     default:               return 0;
-    }
-}
-
-int tui_parse_two_numeric(const wchar_t *args, ScanType type, ScanValue *lo, ScanValue *hi)
-{
-    switch (type) {
-    case SCAN_TYPE_I8:
-    case SCAN_TYPE_I16:
-    case SCAN_TYPE_I32: {
-        int a, b;
-        if (swscanf_s(args, L"%d %d", &a, &b) != 2) return 0;
-        set_int_value(lo, type, a);
-        set_int_value(hi, type, b);
-        return 1;
-    }
-    case SCAN_TYPE_I64: {
-        long long a, b;
-        if (swscanf_s(args, L"%lld %lld", &a, &b) != 2) return 0;
-        scanner_value_set(lo, type, &a, sizeof(a));
-        scanner_value_set(hi, type, &b, sizeof(b));
-        return 1;
-    }
-    case SCAN_TYPE_U8:
-    case SCAN_TYPE_U16:
-    case SCAN_TYPE_U32: {
-        unsigned int a, b;
-        if (swscanf_s(args, L"%u %u", &a, &b) != 2) return 0;
-        set_uint_value(lo, type, a);
-        set_uint_value(hi, type, b);
-        return 1;
-    }
-    case SCAN_TYPE_U64: {
-        unsigned long long a, b;
-        if (swscanf_s(args, L"%llu %llu", &a, &b) != 2) return 0;
-        scanner_value_set(lo, type, &a, sizeof(a));
-        scanner_value_set(hi, type, &b, sizeof(b));
-        return 1;
-    }
-    case SCAN_TYPE_F32: {
-        float a, b;
-        if (swscanf_s(args, L"%f %f", &a, &b) != 2) return 0;
-        scanner_value_set(lo, type, &a, sizeof(a));
-        scanner_value_set(hi, type, &b, sizeof(b));
-        return 1;
-    }
-    case SCAN_TYPE_F64: {
-        double a, b;
-        if (swscanf_s(args, L"%lf %lf", &a, &b) != 2) return 0;
-        scanner_value_set(lo, type, &a, sizeof(a));
-        scanner_value_set(hi, type, &b, sizeof(b));
-        return 1;
-    }
-    default:
-        return 0;   /* string/AOB: between unsupported */
     }
 }
 
@@ -289,18 +230,4 @@ static int parse_string_value(const wchar_t *args, ScanValue *out)
 
     scanner_value_set(out, SCAN_TYPE_STRING, bytes, n);
     return 1;
-}
-
-static void set_int_value(ScanValue *v, ScanType type, int x)
-{
-    if (type == SCAN_TYPE_I8)  { signed char t = (signed char)x; scanner_value_set(v, type, &t, 1); }
-    else if (type == SCAN_TYPE_I16) { short t = (short)x;        scanner_value_set(v, type, &t, 2); }
-    else                             { int t = x;                 scanner_value_set(v, type, &t, 4); }
-}
-
-static void set_uint_value(ScanValue *v, ScanType type, unsigned int x)
-{
-    if (type == SCAN_TYPE_U8) { unsigned char t = (unsigned char)x;  scanner_value_set(v, type, &t, 1); }
-    else if (type == SCAN_TYPE_U16) { unsigned short t = (unsigned short)x; scanner_value_set(v, type, &t, 2); }
-    else                            { unsigned int t = x;            scanner_value_set(v, type, &t, 4); }
 }

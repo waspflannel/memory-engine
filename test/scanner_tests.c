@@ -139,10 +139,10 @@ int main(void)
 
         ScanRegion *regs = NULL;
         size_t nregs = 0;
-        check(scanner_enumerate_regions(&target, &regs, &nregs) == PLATFORM_OK, "enumerate_regions ok");
+        check(scanner_list_regions(&target, &regs, &nregs) == PLATFORM_OK, "list_regions ok");
 
-        ScanResults single; scan_results_init(&single);
-        check(scanner_scan_regions(&s, regs, nregs, &single) == PLATFORM_OK, "scanner_scan_regions (single) ok");
+        ScanResults single; results_init(&single);
+        check(scanner_find_hits(&s, regs, nregs, &single) == PLATFORM_OK, "scanner_find_hits (single) ok");
 
         check(scanner_first_scan(&s) == PLATFORM_OK, "threaded scanner_first_scan ok");
 
@@ -159,7 +159,7 @@ int main(void)
               "single results contain health_addr with value 100");
 
         scanner_free_regions(regs);
-        scan_results_free(&single);
+        results_free(&single);
         scanner_session_destroy(&s);
     }
 
@@ -187,49 +187,14 @@ int main(void)
         scanner_session_destroy(&s);
     }
 
-    printf("--- T3: unknown-initial first scan + the relative narrowing modes ---\n");
+    printf("--- T3: bad-mode first scan fails loud (only exact is valid) ---\n");
     {
-        int v0 = 100; memory_write(&target, health_addr, &v0, sizeof(v0));
-
         ScanSession s;
-        scanner_session_init(&s, &target, SCAN_TYPE_I32, SCAN_MODE_UNKNOWN_INITIAL);
-        s.mode = SCAN_MODE_UNKNOWN_INITIAL;
-        check(scanner_first_scan(&s) == PLATFORM_OK, "unknown-initial first scan ok");
-        check(s.results.count > 1000, "unknown-initial snapshots many candidates");
-
-        int v99 = 99; memory_write(&target, health_addr, &v99, sizeof(v99));
-        s.mode = SCAN_MODE_CHANGED; scanner_next_scan(&s);
-        check(find_addr(&s.results, health_addr), "CHANGED keeps health_addr");
-
-        s.mode = SCAN_MODE_UNCHANGED; scanner_next_scan(&s);
-        check(find_addr(&s.results, health_addr), "UNCHANGED keeps health_addr after no further change");
-
-        int v109 = 109; memory_write(&target, health_addr, &v109, sizeof(v109));
-        s.mode = SCAN_MODE_INCREASED; scanner_next_scan(&s);
-        check(find_addr(&s.results, health_addr), "INCREASED keeps health_addr (99 -> 109)");
-
-        int v90 = 90; memory_write(&target, health_addr, &v90, sizeof(v90));
-        s.mode = SCAN_MODE_DECREASED; scanner_next_scan(&s);
-        check(find_addr(&s.results, health_addr), "DECREASED keeps health_addr (109 -> 90)");
-
-        int v65 = 65; memory_write(&target, health_addr, &v65, sizeof(v65));
-        int delta25 = 25;
-        scanner_value_set(&s.param, SCAN_TYPE_I32, &delta25, sizeof(delta25));
-        s.mode = SCAN_MODE_DECREASED_BY; scanner_next_scan(&s);
-        check(find_addr(&s.results, health_addr), "DECREASED_BY 25 keeps health_addr (90 -> 65)");
-
-        int v90b = 90; memory_write(&target, health_addr, &v90b, sizeof(v90b));
-        scanner_value_set(&s.param, SCAN_TYPE_I32, &delta25, sizeof(delta25));
-        s.mode = SCAN_MODE_INCREASED_BY; scanner_next_scan(&s);
-        check(find_addr(&s.results, health_addr), "INCREASED_BY 25 keeps health_addr (65 -> 90)");
-
-        int v85 = 85, lo = 80, hi = 100;
-        memory_write(&target, health_addr, &v85, sizeof(v85));
-        scanner_value_set(&s.param,  SCAN_TYPE_I32, &lo, sizeof(lo));
-        scanner_value_set(&s.param2, SCAN_TYPE_I32, &hi, sizeof(hi));
-        s.mode = SCAN_MODE_BETWEEN; scanner_next_scan(&s);
-        check(find_addr(&s.results, health_addr), "BETWEEN 80..100 keeps health_addr (=85)");
-
+        int bad_mode = SCAN_MODE_EXACT + 1;
+        scanner_session_init(&s, &target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
+        s.mode = (ScanMode)bad_mode;
+        check(scanner_first_scan(&s) != PLATFORM_OK, "first scan rejects non-exact mode");
+        check(s.has_results == 0 && s.results.count == 0, "failed first scan leaves no result set");
         scanner_session_destroy(&s);
     }
 
@@ -293,15 +258,6 @@ int main(void)
         scanner_value_set_wildcard(&s.param, wild, sizeof(wild));
         scanner_first_scan(&s);
         check(find_addr(&s.results, name_addr), "AOB with 4 wildcard bytes finds target_name");
-        scanner_session_destroy(&s);
-    }
-
-    printf("--- T8: bad-mode first scan fails loud (does not narrow-mode seed a set) ---\n");
-    {
-        ScanSession s;
-        scanner_session_init(&s, &target, SCAN_TYPE_I32, SCAN_MODE_CHANGED);
-        check(scanner_first_scan(&s) != PLATFORM_OK, "first scan rejects CHANGED mode");
-        check(s.has_results == 0 && s.results.count == 0, "failed first scan leaves no result set");
         scanner_session_destroy(&s);
     }
 

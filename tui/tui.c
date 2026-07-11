@@ -335,7 +335,7 @@ static void draw_scanner_panel(Screen *screen)
     if (!s->has_results) {
         screen_text(screen, main_x, row, L"Run `scan <value>` to find (use `type <name>` to pick type)", s_attr_normal);
     } else if (s->results.count == 0) {
-        screen_text(screen, main_x, row, L"No survivors -- try a different value or `scanclear`", s_attr_error);
+        screen_text(screen, main_x, row, L"No survivors -- try a different value or run `scan` again", s_attr_error);
     } else {
         wchar_t addrs[160];
         unsigned short w = s->results.value_width;
@@ -361,7 +361,7 @@ static void draw_scanner_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > row) {
         screen_text(screen, main_x, help_row,
-                    L"cmds: type <name>  mode <name>  scan <v>|?  next <v>  scanclear  strenc ascii|utf16  ? help",
+                    L"cmds: type <name>  scan <v>  next <v>  strenc ascii|utf16  ? help",
                     s_attr_border);
     }
 }

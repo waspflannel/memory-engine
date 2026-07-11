@@ -20,15 +20,7 @@ static const HelpEntry types_entries[] = {
 };
 
 static const HelpEntry modes_entries[] = {
-    { L"exact",       L"first or next scan: keep addresses whose current value matches the number you type" },
-    { L"changed",     L"next scan only: keep addresses whose value differs from the last snapshotted value" },
-    { L"unchanged",   L"next scan only: keep addresses whose value is identical to the last snapshotted value" },
-    { L"increased",   L"next scan only: keep addresses whose current value is greater than it was (numeric types only)" },
-    { L"decreased",   L"next scan only: keep addresses whose current value is less than it was (numeric types only)" },
-    { L"increasedby", L"next scan only: keep addresses where value went up by exactly N (numeric types only, needs a number)" },
-    { L"decreasedby", L"next scan only: keep addresses where value went down by exactly N (numeric types only, needs a number)" },
-    { L"between",     L"next scan only: keep addresses where lo <= value <= hi (numeric types only, needs two numbers like `next 50 100`)" },
-    { L"unknown",     L"first scan only: snapshot every address with whatever value it holds; then narrow with the modes above" },
+    { L"exact", L"first scan: walk every byte of committed readable memory, keep addresses matching the typed value; next scan: re-read surviving addresses, keep those still matching" },
 };
 
 static const HelpEntry encodings_entries[] = {
@@ -42,11 +34,9 @@ static const HelpEntry encodings_entries[] = {
 
 static const HelpEntry workflow_entries[] = {
     { L"the loop",      L"`scan` a value, change it in the game, `next` to narrow; repeat until one address remains" },
-    { L"type <name>",   L"set the value type you are searching for -- clears any current scan results and resets mode to exact" },
-    { L"mode <name>",   L"set how the scanner filters results: exact, changed, increased, between, etc. (see Modes tab)" },
-    { L"scan <value>",  L"first scan: walk every byte of committed readable memory and keep addresses matching the value; `scan ?` snapshots everything (unknown mode)" },
-    { L"next [value]",  L"narrows the current result set using the active mode; value arguments depend on the mode (exact/increasedby/between need them, changed/unchanged don't)" },
-    { L"scanclear",     L"drop the current result set and reset -- use this to start a fresh scan from scratch" },
+    { L"type <name>",   L"set the value type you are searching for -- clears any current scan results" },
+    { L"scan <value>",  L"first scan: walk every byte of committed readable memory and keep addresses matching the value" },
+    { L"next <value>",  L"re-reads surviving addresses, keeping only those that now match the new value" },
     { L"strenc a|u",    L"set string encoding to ascii or utf16 for the string scan type" },
     { L"help / ?",      L"open this book (press ? on the Scanner panel, or type `help` in the command bar)" },
 };

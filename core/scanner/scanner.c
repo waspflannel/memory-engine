@@ -18,25 +18,21 @@ typedef struct ScanWork {
     const ScanRegion  *regions;
     size_t             count;
     unsigned short     width;
-    int                snapshot;
     ScanResults        results;
     PlatformError      err;
 } ScanWork;
 
 /* Forward declarations — definitions at bottom of file. */
-static int  scan_results_append(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width);
+static int  append_hit(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width);
 static int  value_equals(const unsigned char *cur, const ScanValue *p);
-static int  numeric_compare(ScanType type, const unsigned char *a, const unsigned char *b);
-static void numeric_add(ScanType type, const unsigned char *a, const unsigned char *b, int sign, unsigned char *out);
-static int  keep_hit(const ScanSession *session, const unsigned char *current, const unsigned char *prev, size_t width);
-static PlatformError scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count,
-                                   unsigned short width, int snapshot, ScanResults *out);
-static int  scan_worker(void *arg);
-static PlatformError merge_worker_results(ScanWork *works, int n, ScanResults *out);
+static PlatformError match_regions(const ScanSession *session, const ScanRegion *regions, size_t count,
+                                    unsigned short width, ScanResults *out);
+static int  worker_fn(void *arg);
+static PlatformError merge_worker_results(ScanWork *works, int n, unsigned short width, ScanResults *out);
 
 /* ---- Public API (order matches scanner.h) ---- */
 
-void scan_results_init(ScanResults *results)
+void results_init(ScanResults *results)
 {
     if (!results) return;
     results->addresses   = NULL;
@@ -46,7 +42,7 @@ void scan_results_init(ScanResults *results)
     results->value_width  = 0;
 }
 
-void scan_results_free(ScanResults *results)
+void results_free(ScanResults *results)
 {
     if (!results) return;
     free(results->addresses);
@@ -58,13 +54,7 @@ void scan_results_free(ScanResults *results)
     results->value_width = 0;
 }
 
-void scan_results_clear(ScanResults *results)
-{
-    if (!results) return;
-    results->count = 0;
-}
-
-unsigned short scan_type_width(ScanType type)
+unsigned short scanner_type_width(ScanType type)
 {
     switch (type) {
     case SCAN_TYPE_I8:
@@ -85,7 +75,7 @@ void scanner_value_set(ScanValue *value, ScanType type, const void *bytes, size_
 {
     if (!value) return;
     value->type = type;
-    unsigned short w = scan_type_width(type);
+    unsigned short w = scanner_type_width(type);
     value->width = w ? w : (unsigned short)(len > SCAN_VALUE_MAX ? SCAN_VALUE_MAX : len);
     if (bytes && value->width) {
         memcpy(value->bytes, bytes, value->width);
@@ -106,30 +96,24 @@ void scanner_session_init(ScanSession *session, const Target *target, ScanType t
     session->target = target;
     session->mode   = mode;
     scanner_value_set(&session->param, type, NULL, 0);
-    scanner_value_set(&session->param2, type, NULL, 0);
-    scan_results_init(&session->results);
+    results_init(&session->results);
     session->has_results = 0;
 }
 
 void scanner_session_destroy(ScanSession *session)
 {
     if (!session) return;
-    scan_results_free(&session->results);
+    results_free(&session->results);
     session->target = NULL;
 }
 
-PlatformError scanner_scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count, ScanResults *out)
+PlatformError scanner_find_hits(const ScanSession *session, const ScanRegion *regions, size_t count, ScanResults *out)
 {
     unsigned short width = session->param.width;
-    int snapshot = 0;
-    if (session->mode == SCAN_MODE_UNKNOWN_INITIAL) {
-        width = scan_type_width(session->param.type);
-        snapshot = 1;
-        if (width == 0) return PLATFORM_ERR_INVALID_PARAM;
-    } else if (width == 0) {
+    if (width == 0) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
-    return scan_regions(session, regions, count, width, snapshot, out);
+    return match_regions(session, regions, count, width, out);
 }
 
 PlatformError scanner_first_scan(ScanSession *session)
@@ -138,32 +122,21 @@ PlatformError scanner_first_scan(ScanSession *session)
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
-    ScanMode m = session->mode;
-    if (m != SCAN_MODE_EXACT && m != SCAN_MODE_UNKNOWN_INITIAL) {
-        /* Only exact and unknown-initial seed a result set; the other modes narrow. */
+    if (session->mode != SCAN_MODE_EXACT) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
     unsigned short width = session->param.width;
-    if (m == SCAN_MODE_EXACT && width == 0) {
+    if (width == 0) {
         return PLATFORM_ERR_INVALID_PARAM;   /* no value set */
-    }
-    int snapshot = 0;
-    if (m == SCAN_MODE_UNKNOWN_INITIAL) {
-        width = scan_type_width(session->param.type);
-        if (width == 0) {
-            return PLATFORM_ERR_INVALID_PARAM;  /* unknown-initial needs a fixed-width numeric type */
-        }
-        session->param.width = width;  /* narrowing needs a byte size to re-read with */
-        snapshot = 1;
     }
 
     /* A first scan discards any prior result set entirely. */
-    scan_results_free(&session->results);
+    results_free(&session->results);
 
     ScanRegion *regions = NULL;
     size_t region_count = 0;
-    PlatformError err = scanner_enumerate_regions(session->target, &regions, &region_count);
+    PlatformError err = scanner_list_regions(session->target, &regions, &region_count);
     if (err != PLATFORM_OK) {
         return err;
     }
@@ -174,7 +147,7 @@ PlatformError scanner_first_scan(ScanSession *session)
     }
 
     if (nthreads == 1) {
-        PlatformError e = scan_regions(session, regions, region_count, width, snapshot, &session->results);
+        PlatformError e = match_regions(session, regions, region_count, width, &session->results);
         scanner_free_regions(regions);
         if (e != PLATFORM_OK) {
             return e;
@@ -194,17 +167,16 @@ PlatformError scanner_first_scan(ScanSession *session)
         works[i].regions  = regions + start;
         works[i].count    = end - start;
         works[i].width    = width;
-        works[i].snapshot = snapshot;
         works[i].err      = PLATFORM_OK;
-        scan_results_init(&works[i].results);
+        results_init(&works[i].results);
     }
 
     for (int i = 0; i < nthreads; i++) {
-        if (thrd_create(&tids[i], scan_worker, &works[i]) == thrd_success) {
+        if (thrd_create(&tids[i], worker_fn, &works[i]) == thrd_success) {
             started[i] = 1;
         } else {
-            works[i].err = scan_regions(session, works[i].regions, works[i].count,
-                                        works[i].width, works[i].snapshot, &works[i].results);
+            works[i].err = match_regions(session, works[i].regions, works[i].count,
+                                         works[i].width, &works[i].results);
         }
     }
     for (int i = 0; i < nthreads; i++) {
@@ -221,12 +193,12 @@ PlatformError scanner_first_scan(ScanSession *session)
         }
     }
     if (worst != PLATFORM_OK) {
-        for (int i = 0; i < nthreads; i++) scan_results_free(&works[i].results);
+        for (int i = 0; i < nthreads; i++) results_free(&works[i].results);
         scanner_free_regions(regions);
         return worst;
     }
 
-    PlatformError me = merge_worker_results(works, nthreads, &session->results);
+    PlatformError me = merge_worker_results(works, nthreads, width, &session->results);
     scanner_free_regions(regions);
     if (me != PLATFORM_OK) {
         return me;
@@ -243,10 +215,6 @@ PlatformError scanner_next_scan(ScanSession *session)
     if (!session->has_results) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
-    ScanMode m = session->mode;
-    if (m == SCAN_MODE_UNKNOWN_INITIAL) {
-        return PLATFORM_ERR_INVALID_PARAM;  /* first-scan-only mode; pick a narrowing mode */
-    }
     if (session->param.width == 0) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
@@ -258,12 +226,11 @@ PlatformError scanner_next_scan(ScanSession *session)
     unsigned char cur[SCAN_VALUE_MAX];
     for (size_t i = 0; i < r->count; i++) {
         unsigned long long addr = r->addresses[i];
-        unsigned char       *prev = r->values + i * W;
         PlatformError rd = memory_read(session->target, addr, cur, W);
         if (rd != PLATFORM_OK) {
             continue;
         }
-        if (keep_hit(session, cur, prev, W)) {
+        if (value_equals(cur, &session->param)) {
             r->addresses[survivors] = addr;
             memcpy(r->values + survivors * W, cur, W);
             survivors++;
@@ -273,7 +240,7 @@ PlatformError scanner_next_scan(ScanSession *session)
     return PLATFORM_OK;
 }
 
-PlatformError scanner_enumerate_regions(const Target *target, ScanRegion **regions, size_t *count)
+PlatformError scanner_list_regions(const Target *target, ScanRegion **regions, size_t *count)
 {
     if (!target || !target->handle || !regions || !count) {
         return PLATFORM_ERR_INVALID_PARAM;
@@ -341,20 +308,8 @@ void scanner_free_regions(ScanRegion *regions)
 
 /* ---- Static helpers ---- */
 
-static int type_is_numeric(ScanType type)
-{
-    return type == SCAN_TYPE_I8 || type == SCAN_TYPE_I16 ||
-           type == SCAN_TYPE_I32 || type == SCAN_TYPE_I64 ||
-           type == SCAN_TYPE_U8 || type == SCAN_TYPE_U16 ||
-           type == SCAN_TYPE_U32 || type == SCAN_TYPE_U64 ||
-           type == SCAN_TYPE_F32 || type == SCAN_TYPE_F64;
-}
-
 static int value_equals(const unsigned char *cur, const ScanValue *p)
 {
-    if (!p->wild[0] && cur[0] != p->bytes[0]) {
-        return 0;
-    }
     for (unsigned short i = 0; i < p->width; i++) {
         if (!p->wild[i] && cur[i] != p->bytes[i]) {
             return 0;
@@ -363,90 +318,7 @@ static int value_equals(const unsigned char *cur, const ScanValue *p)
     return 1;
 }
 
-static int numeric_compare(ScanType type, const unsigned char *a, const unsigned char *b)
-{
-    switch (type) {
-    case SCAN_TYPE_I8: {
-        int8_t x = (int8_t)a[0],  y = (int8_t)b[0];
-        return (x > y) - (x < y);
-    }
-    case SCAN_TYPE_U8: {
-        uint8_t x = a[0], y = b[0];
-        return (x > y) - (x < y);
-    }
-    case SCAN_TYPE_I16: { int16_t x, y; memcpy(&x, a, 2); memcpy(&y, b, 2); return (x > y) - (x < y); }
-    case SCAN_TYPE_U16: { uint16_t x, y; memcpy(&x, a, 2); memcpy(&y, b, 2); return (x > y) - (x < y); }
-    case SCAN_TYPE_I32: { int32_t x, y; memcpy(&x, a, 4); memcpy(&y, b, 4); return (x > y) - (x < y); }
-    case SCAN_TYPE_U32: { uint32_t x, y; memcpy(&x, a, 4); memcpy(&y, b, 4); return (x > y) - (x < y); }
-    case SCAN_TYPE_I64: { int64_t x, y; memcpy(&x, a, 8); memcpy(&y, b, 8); return (x > y) - (x < y); }
-    case SCAN_TYPE_U64: { uint64_t x, y; memcpy(&x, a, 8); memcpy(&y, b, 8); return (x > y) - (x < y); }
-    case SCAN_TYPE_F32: {
-        float x, y; memcpy(&x, a, 4); memcpy(&y, b, 4);
-        if (x != x || y != y) return -2;
-        return (x > y) - (x < y);
-    }
-    case SCAN_TYPE_F64: {
-        double x, y; memcpy(&x, a, 8); memcpy(&y, b, 8);
-        if (x != x || y != y) return -2;
-        return (x > y) - (x < y);
-    }
-    default:
-        return -2;  /* string/AOB: not numeric */
-    }
-}
-
-static void numeric_add(ScanType type, const unsigned char *a, const unsigned char *b,
-                        int sign, unsigned char *out)
-{
-    switch (type) {
-    case SCAN_TYPE_I8: { int8_t x, y; memcpy(&x, a, 1); memcpy(&y, b, 1); int8_t r = sign > 0 ? (int8_t)(x + y) : (int8_t)(x - y); memcpy(out, &r, 1); break; }
-    case SCAN_TYPE_U8: { uint8_t x, y; memcpy(&x, a, 1); memcpy(&y, b, 1); uint8_t r = sign > 0 ? (uint8_t)(x + y) : (uint8_t)(x - y); memcpy(out, &r, 1); break; }
-    case SCAN_TYPE_I16: { int16_t x, y; memcpy(&x, a, 2); memcpy(&y, b, 2); int16_t r = sign > 0 ? (int16_t)(x + y) : (int16_t)(x - y); memcpy(out, &r, 2); break; }
-    case SCAN_TYPE_U16: { uint16_t x, y; memcpy(&x, a, 2); memcpy(&y, b, 2); uint16_t r = sign > 0 ? (uint16_t)(x + y) : (uint16_t)(x - y); memcpy(out, &r, 2); break; }
-    case SCAN_TYPE_I32: { int32_t x, y; memcpy(&x, a, 4); memcpy(&y, b, 4); int32_t r = sign > 0 ? (x + y) : (x - y); memcpy(out, &r, 4); break; }
-    case SCAN_TYPE_U32: { uint32_t x, y; memcpy(&x, a, 4); memcpy(&y, b, 4); uint32_t r = sign > 0 ? (x + y) : (x - y); memcpy(out, &r, 4); break; }
-    case SCAN_TYPE_I64: { int64_t x, y; memcpy(&x, a, 8); memcpy(&y, b, 8); int64_t r = sign > 0 ? (x + y) : (x - y); memcpy(out, &r, 8); break; }
-    case SCAN_TYPE_U64: { uint64_t x, y; memcpy(&x, a, 8); memcpy(&y, b, 8); uint64_t r = sign > 0 ? (x + y) : (x - y); memcpy(out, &r, 8); break; }
-    case SCAN_TYPE_F32: { float x, y; memcpy(&x, a, 4); memcpy(&y, b, 4); float r = sign > 0 ? (x + y) : (x - y); memcpy(out, &r, 4); break; }
-    case SCAN_TYPE_F64: { double x, y; memcpy(&x, a, 8); memcpy(&y, b, 8); double r = sign > 0 ? (x + y) : (x - y); memcpy(out, &r, 8); break; }
-    default: break;
-    }
-}
-
-static int keep_hit(const ScanSession *session, const unsigned char *current,
-                    const unsigned char *prev, size_t width)
-{
-    ScanType type = session->param.type;
-    switch (session->mode) {
-    case SCAN_MODE_EXACT:        return value_equals(current, &session->param);
-    case SCAN_MODE_CHANGED:      return memcmp(current, prev, width) != 0;
-    case SCAN_MODE_UNCHANGED:    return memcmp(current, prev, width) == 0;
-    case SCAN_MODE_INCREASED:    return numeric_compare(type, current, prev) > 0;
-    case SCAN_MODE_DECREASED:    return numeric_compare(type, current, prev) < 0;
-    case SCAN_MODE_INCREASED_BY: {
-        if (!type_is_numeric(type)) return 0;
-        unsigned char tmp[SCAN_VALUE_MAX];
-        numeric_add(type, prev, session->param.bytes, +1, tmp);
-        return memcmp(current, tmp, width) == 0;
-    }
-    case SCAN_MODE_DECREASED_BY: {
-        if (!type_is_numeric(type)) return 0;
-        unsigned char tmp[SCAN_VALUE_MAX];
-        numeric_add(type, prev, session->param.bytes, -1, tmp);
-        return memcmp(current, tmp, width) == 0;
-    }
-    case SCAN_MODE_BETWEEN: {
-        int lo = numeric_compare(type, current, session->param.bytes);
-        int hi = numeric_compare(type, current, session->param2.bytes);
-        return lo >= 0 && lo != -2 && hi <= 0 && hi != -2;
-    }
-    case SCAN_MODE_UNKNOWN_INITIAL:
-        return 0;  /* first-scan-only mode; never a narrowing predicate */
-    }
-    return 0;
-}
-
-static int scan_results_append(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width)
+static int append_hit(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width)
 {
     if (width > SCAN_VALUE_MAX) return 0;
     if (results->value_width == 0) {
@@ -475,8 +347,8 @@ static int scan_results_append(ScanResults *results, unsigned long long address,
     return 1;
 }
 
-static PlatformError scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count,
-                                   unsigned short width, int snapshot, ScanResults *out)
+static PlatformError match_regions(const ScanSession *session, const ScanRegion *regions, size_t count,
+                                    unsigned short width, ScanResults *out)
 {
     const size_t W = width;
     const ScanValue *want = &session->param;
@@ -495,10 +367,10 @@ static PlatformError scan_regions(const ScanSession *session, const ScanRegion *
 
             size_t last = take - W;
             for (size_t off = 0; off <= last; off++) {
-                if (!snapshot && !value_equals(buf + off, want)) {
+                if (!value_equals(buf + off, want)) {
                     continue;
                 }
-                if (!scan_results_append(out, addr + off, buf + off, W)) {
+                if (!append_hit(out, addr + off, buf + off, W)) {
                     return PLATFORM_ERR_INTERNAL;
                 }
             }
@@ -511,47 +383,31 @@ static PlatformError scan_regions(const ScanSession *session, const ScanRegion *
     return PLATFORM_OK;
 }
 
-static int scan_worker(void *arg)
+static int worker_fn(void *arg)
 {
     ScanWork *w = (ScanWork *)arg;
-    w->err = scan_regions(w->session, w->regions, w->count, w->width, w->snapshot, &w->results);
+    w->err = match_regions(w->session, w->regions, w->count, w->width, &w->results);
     return 0;
 }
 
-static PlatformError merge_worker_results(ScanWork *works, int n, ScanResults *out)
+static PlatformError merge_worker_results(ScanWork *works, int n, unsigned short width, ScanResults *out)
 {
     size_t total = 0;
     for (int i = 0; i < n; i++) total += works[i].results.count;
 
-    /* value_width is set per-worker on its first append; if worker 0 found no
-       hits its width is still 0. Scan every worker for a real width before we
-       size the merged `values` buffer (else we'd allocate 0 bytes). */
-    unsigned short width = 0;
-    for (int i = 0; i < n; i++) {
-        if (works[i].results.value_width) {
-            width = works[i].results.value_width;
-            break;
-        }
-    }
-
-    scan_results_init(out);
+    results_init(out);
     out->value_width = width;
     if (total == 0) {
-        for (int i = 0; i < n; i++) scan_results_free(&works[i].results);
+        for (int i = 0; i < n; i++) results_free(&works[i].results);
         return PLATFORM_OK;
-    }
-    if (width == 0) {
-        /* total > 0 but no worker recorded a width -- inconsistent state. */
-        for (int i = 0; i < n; i++) scan_results_free(&works[i].results);
-        return PLATFORM_ERR_INTERNAL;
     }
 
     out->addresses = (unsigned long long *)malloc(total * sizeof(unsigned long long));
     out->values    = (unsigned char *)malloc((size_t)total * width);
     if (!out->addresses || !out->values) {
         free(out->addresses); free(out->values);
-        scan_results_init(out);
-        for (int i = 0; i < n; i++) scan_results_free(&works[i].results);
+        results_init(out);
+        for (int i = 0; i < n; i++) results_free(&works[i].results);
         return PLATFORM_ERR_INTERNAL;
     }
     out->capacity = total;
@@ -566,7 +422,7 @@ static PlatformError merge_worker_results(ScanWork *works, int n, ScanResults *o
         }
         pos_a += c;
         pos_v += c * width;
-        scan_results_free(&works[i].results);
+        results_free(&works[i].results);
     }
     out->count = total;
     return PLATFORM_OK;

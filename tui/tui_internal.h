@@ -76,7 +76,6 @@ void           tui_attach_to_selected(void);
 const wchar_t *tui_scan_type_name(ScanType type);
 const wchar_t *tui_scan_mode_name(ScanMode mode);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
-int            tui_parse_two_numeric(const wchar_t *args, ScanType type, ScanValue *lo, ScanValue *hi);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
 void           tui_exec_command(void);

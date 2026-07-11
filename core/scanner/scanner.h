@@ -19,11 +19,10 @@ typedef struct {
     unsigned short      value_width;
 } ScanResults;
 
-void scan_results_init(ScanResults *results);
-void scan_results_free(ScanResults *results);
-void scan_results_clear(ScanResults *results);
+void results_init(ScanResults *results);
+void results_free(ScanResults *results);
 
-PlatformError scanner_enumerate_regions(const Target *target, ScanRegion **regions, size_t *count);
+PlatformError scanner_list_regions(const Target *target, ScanRegion **regions, size_t *count);
 void          scanner_free_regions(ScanRegion *regions);
 
 typedef enum {
@@ -43,14 +42,6 @@ typedef enum {
 
 typedef enum {
     SCAN_MODE_EXACT,            /* first or next: keep where value == param */
-    SCAN_MODE_CHANGED,          /* next: keep where value differs from last-seen */
-    SCAN_MODE_UNCHANGED,        /* next: keep where value equals last-seen */
-    SCAN_MODE_INCREASED,        /* next: numeric only */
-    SCAN_MODE_DECREASED,        /* next: numeric only */
-    SCAN_MODE_INCREASED_BY,     /* next: numeric only; param is the delta */
-    SCAN_MODE_DECREASED_BY,     /* next: numeric only; param is the delta */
-    SCAN_MODE_BETWEEN,          /* next: numeric only; keep where lo <= value <= hi (param, param2) */
-    SCAN_MODE_UNKNOWN_INITIAL,  /* first scan only: snapshot every address with its current value */
 } ScanMode;
 
 typedef struct {
@@ -63,13 +54,12 @@ typedef struct {
 typedef struct {
     const Target *target;   /* borrowed, not owned */
     ScanMode      mode;
-    ScanValue     param;        /* exact value / delta / lower bound */
-    ScanValue     param2;       /* upper bound for SCAN_MODE_BETWEEN */
+    ScanValue     param;        /* value to search for */
     ScanResults   results;
     int           has_results;        /* set after first scan; next scan requires it */
 } ScanSession;
 
-unsigned short scan_type_width(ScanType type);     /* fixed width, or 0 for variable (string/AOB) */
+unsigned short scanner_type_width(ScanType type);     /* fixed width, or 0 for variable (string/AOB) */
 
 void scanner_value_set(ScanValue *value, ScanType type, const void *bytes, size_t len);
 void scanner_value_set_wildcard(ScanValue *value, const unsigned char *wild, size_t len);
@@ -79,6 +69,6 @@ void           scanner_session_destroy(ScanSession *session);
 
 PlatformError  scanner_first_scan(ScanSession *session);
 PlatformError  scanner_next_scan(ScanSession *session);
-PlatformError  scanner_scan_regions(const ScanSession *session, const ScanRegion *regions, size_t count, ScanResults *out);
+PlatformError  scanner_find_hits(const ScanSession *session, const ScanRegion *regions, size_t count, ScanResults *out);
 
 #endif

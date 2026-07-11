@@ -16,7 +16,6 @@
 #define CMD_SCAN_PREFIX   5  /* length of L"scan "   */
 #define CMD_NEXT_PREFIX   5  /* length of L"next "   */
 #define CMD_TYPE_PREFIX   5  /* length of L"type "   */
-#define CMD_MODE_PREFIX   5  /* length of L"mode "   */
 #define CMD_STRENC_PREFIX 7  /* length of L"strenc " */
 
 /* Forward declarations — definitions at bottom of file. */
@@ -24,9 +23,7 @@ static void cmd_read(const wchar_t *args);
 static void cmd_write(const wchar_t *args);
 static void cmd_scan(const wchar_t *args);
 static void cmd_next(const wchar_t *args);
-static void cmd_scanclear(void);
 static void cmd_type(const wchar_t *args);
-static void cmd_mode(const wchar_t *args);
 static void cmd_strenc(const wchar_t *args);
 
 /* ---- Public API (order matches tui_internal.h) ---- */
@@ -92,20 +89,8 @@ void tui_exec_command(void)
         return;
     }
 
-    if (wcscmp(tui_state.cmd_buf, L"scanclear") == 0) {
-        cmd_scanclear();
-        tui_state.cmd_len = 0;
-        return;
-    }
-
     if (wcsncmp(tui_state.cmd_buf, L"type ", CMD_TYPE_PREFIX) == 0) {
         cmd_type(tui_state.cmd_buf + CMD_TYPE_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"mode ", CMD_MODE_PREFIX) == 0) {
-        cmd_mode(tui_state.cmd_buf + CMD_MODE_PREFIX);
         tui_state.cmd_len = 0;
         return;
     }
@@ -223,22 +208,11 @@ static void cmd_scan(const wchar_t *args)
         return;
     }
 
-    /* `scan ?` / `scan unknown` seeds with unknown-initial: snapshot every
-       address. Otherwise parse a value and first-scan for it (exact). */
-    int unknown = (wcscmp(args, L"?") == 0 || wcscmp(args, L"unknown") == 0);
-    if (unknown) {
-        if (scan_type_width(tui_state.scanner.param.type) == 0) {
-            tui_set_status(L"unknown-initial needs a fixed-width numeric type", TRUE);
-            return;
-        }
-        tui_state.scanner.mode = SCAN_MODE_UNKNOWN_INITIAL;
-    } else {
-        if (!tui_parse_scan_value(args, &tui_state.scanner.param)) {
-            tui_set_status(L"usage: scan <value>  (or `scan ?` for unknown-initial)", TRUE);
-            return;
-        }
-        tui_state.scanner.mode = SCAN_MODE_EXACT;
+    if (!tui_parse_scan_value(args, &tui_state.scanner.param)) {
+        tui_set_status(L"usage: scan <value>", TRUE);
+        return;
     }
+    tui_state.scanner.mode = SCAN_MODE_EXACT;
 
     PlatformError err = scanner_first_scan(&tui_state.scanner);
     if (err != PLATFORM_OK) {
@@ -266,31 +240,9 @@ static void cmd_next(const wchar_t *args)
     }
 
     ScanSession *s = &tui_state.scanner;
-    ScanType type = s->param.type;
 
-    switch (s->mode) {
-    case SCAN_MODE_EXACT:
-    case SCAN_MODE_INCREASED_BY:
-    case SCAN_MODE_DECREASED_BY:
-        if (!tui_parse_scan_value(args, &s->param)) {
-            tui_set_status(L"usage: next <value>  (could not parse for current type)", TRUE);
-            return;
-        }
-        break;
-    case SCAN_MODE_BETWEEN:
-        if (!tui_parse_two_numeric(args, type, &s->param, &s->param2)) {
-            tui_set_status(L"usage: next <lo> <hi>  (numeric type only)", TRUE);
-            return;
-        }
-        break;
-    case SCAN_MODE_CHANGED:
-    case SCAN_MODE_UNCHANGED:
-    case SCAN_MODE_INCREASED:
-    case SCAN_MODE_DECREASED:
-        /* No value needed -- compares current vs last-seen. */
-        break;
-    case SCAN_MODE_UNKNOWN_INITIAL:
-        tui_set_status(L"Pick a narrowing mode first: `mode <name>`", TRUE);
+    if (!tui_parse_scan_value(args, &s->param)) {
+        tui_set_status(L"usage: next <value>  (could not parse for current type)", TRUE);
         return;
     }
 
@@ -303,17 +255,9 @@ static void cmd_next(const wchar_t *args)
     }
 
     wchar_t msg[128];
-    swprintf_s(msg, _countof(msg), L"Next scan (%s): %llu survivors",
-               tui_scan_mode_name(s->mode), (unsigned long long)s->results.count);
+    swprintf_s(msg, _countof(msg), L"Next scan: %llu survivors",
+               (unsigned long long)s->results.count);
     tui_set_status(msg, FALSE);
-}
-
-static void cmd_scanclear(void)
-{
-    if (!tui_state.scanner_inited) return;
-    scan_results_clear(&tui_state.scanner.results);
-    tui_state.scanner.has_results = 0;
-    tui_set_status(L"Scanner cleared", FALSE);
 }
 
 static void cmd_type(const wchar_t *args)
@@ -348,44 +292,6 @@ static void cmd_type(const wchar_t *args)
 
     wchar_t msg[64];
     swprintf_s(msg, _countof(msg), L"Type: %s", tui_scan_type_name(type));
-    tui_set_status(msg, FALSE);
-}
-
-static void cmd_mode(const wchar_t *args)
-{
-    if (!tui_state.attached || !tui_state.scanner_inited) {
-        tui_set_status(L"No process attached", TRUE);
-        return;
-    }
-
-    ScanMode m;
-    if (wcscmp(args, L"exact") == 0)             m = SCAN_MODE_EXACT;
-    else if (wcscmp(args, L"changed") == 0)      m = SCAN_MODE_CHANGED;
-    else if (wcscmp(args, L"unchanged") == 0)    m = SCAN_MODE_UNCHANGED;
-    else if (wcscmp(args, L"increased") == 0)    m = SCAN_MODE_INCREASED;
-    else if (wcscmp(args, L"decreased") == 0)    m = SCAN_MODE_DECREASED;
-    else if (wcscmp(args, L"increasedby") == 0)  m = SCAN_MODE_INCREASED_BY;
-    else if (wcscmp(args, L"decreasedby") == 0)  m = SCAN_MODE_DECREASED_BY;
-    else if (wcscmp(args, L"between") == 0)      m = SCAN_MODE_BETWEEN;
-    else {
-        tui_set_status(L"usage: mode exact|changed|unchanged|increased|decreased|increasedby|decreasedby|between", TRUE);
-        return;
-    }
-
-    /* Increased/decreased/by/between need a numeric type (changed/unchanged and
-       exact apply to every type). scan_type_width is 0 for string/AOB. */
-    int needs_numeric = (m == SCAN_MODE_INCREASED || m == SCAN_MODE_DECREASED ||
-                         m == SCAN_MODE_INCREASED_BY || m == SCAN_MODE_DECREASED_BY ||
-                         m == SCAN_MODE_BETWEEN);
-    if (needs_numeric && scan_type_width(tui_state.scanner.param.type) == 0) {
-        tui_set_status(L"that mode needs a numeric type", TRUE);
-        return;
-    }
-
-    tui_state.scanner.mode = m;
-
-    wchar_t msg[64];
-    swprintf_s(msg, _countof(msg), L"Mode: %s", tui_scan_mode_name(m));
     tui_set_status(msg, FALSE);
 }
 

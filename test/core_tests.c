@@ -82,21 +82,20 @@ static void test_scanner_boundary(void)
 {
     printf("--- scanner boundary validation ---\n");
     ScanResults results;
-    scan_results_init(&results);
-    scan_results_clear(&results);
-    check(results.count == 0, "scan_results_clear zeroes count");
-    scan_results_free(&results);
+    results_init(&results);
+    check(results.count == 0, "results_init zeroes count");
+    results_free(&results);
 
     Target empty_target = {0};
     ScanRegion *regions = NULL;
     size_t region_count;
 
-    check(scanner_enumerate_regions(NULL, &regions, &region_count) != PLATFORM_OK,
-          "scanner_enumerate_regions with NULL target fails");
-    check(scanner_enumerate_regions(&empty_target, &regions, &region_count) != PLATFORM_OK,
-          "scanner_enumerate_regions with empty target fails");
-    check(scanner_enumerate_regions(&empty_target, NULL, &region_count) != PLATFORM_OK,
-          "scanner_enumerate_regions with NULL out-params fails");
+    check(scanner_list_regions(NULL, &regions, &region_count) != PLATFORM_OK,
+          "scanner_list_regions with NULL target fails");
+    check(scanner_list_regions(&empty_target, &regions, &region_count) != PLATFORM_OK,
+          "scanner_list_regions with empty target fails");
+    check(scanner_list_regions(&empty_target, NULL, &region_count) != PLATFORM_OK,
+          "scanner_list_regions with NULL out-params fails");
 
     ScanSession session;
     scanner_session_init(&session, &empty_target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
@@ -105,9 +104,9 @@ static void test_scanner_boundary(void)
     check(scanner_next_scan(&session) != PLATFORM_OK, "scanner_next_scan without prior first scan fails");
     scanner_session_destroy(&session);
 
-    scan_results_init(NULL);  /* must not crash on NULL */
-    scan_results_free(NULL);  /* must not crash on NULL */
-    check(1, "scan_results NULL guards do not crash");
+    results_init(NULL);  /* must not crash on NULL */
+    results_free(NULL);  /* must not crash on NULL */
+    check(1, "results NULL guards do not crash");
 }
 
 int main(void)
