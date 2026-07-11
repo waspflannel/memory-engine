@@ -10,13 +10,20 @@
 
 /* Command-prefix lengths, tied to the literals in tui_exec_command by name and
    value: the number is the wide-char length of the corresponding L"<verb> ". */
-#define CMD_ATTACH_PREFIX 7  /* length of L"attach " */
-#define CMD_READ_PREFIX   5  /* length of L"read "   */
-#define CMD_WRITE_PREFIX  6  /* length of L"write "  */
-#define CMD_SCAN_PREFIX   5  /* length of L"scan "   */
-#define CMD_NEXT_PREFIX   5  /* length of L"next "   */
-#define CMD_TYPE_PREFIX   5  /* length of L"type "   */
-#define CMD_STRENC_PREFIX 7  /* length of L"strenc " */
+#define CMD_ATTACH_PREFIX    7  /* length of L"attach "     */
+#define CMD_READ_PREFIX      5  /* length of L"read "       */
+#define CMD_WRITE_PREFIX     6  /* length of L"write "      */
+#define CMD_SCAN_PREFIX      5  /* length of L"scan "       */
+#define CMD_NEXT_PREFIX      5  /* length of L"next "       */
+#define CMD_TYPE_PREFIX      5  /* length of L"type "       */
+#define CMD_STRENC_PREFIX    7  /* length of L"strenc "     */
+#define CMD_ADDENTRY_PREFIX  9  /* length of L"addentry "   */
+#define CMD_DELENTRY_PREFIX  9  /* length of L"delentry "   */
+#define CMD_ENTRYLABEL_PREFIX 11 /* length of L"entrylabel " */
+#define CMD_LOCKENTRY_PREFIX 10 /* length of L"lockentry "  */
+#define CMD_UNLOCKENTRY_PREFIX 12 /* length of L"unlockentry " */
+#define CMD_SAVEENTRY_PREFIX 10 /* length of L"saveentry "  */
+#define CMD_LOADENTRY_PREFIX 10 /* length of L"loadentry "  */
 
 /* Forward declarations — definitions at bottom of file. */
 static void cmd_read(const wchar_t *args);
@@ -25,6 +32,13 @@ static void cmd_scan(const wchar_t *args);
 static void cmd_next(const wchar_t *args);
 static void cmd_type(const wchar_t *args);
 static void cmd_strenc(const wchar_t *args);
+static void cmd_addentry(const wchar_t *args);
+static void cmd_delentry(const wchar_t *args);
+static void cmd_entrylabel(const wchar_t *args);
+static void cmd_lockentry(const wchar_t *args);
+static void cmd_unlockentry(const wchar_t *args);
+static void cmd_saveentry(const wchar_t *args);
+static void cmd_loadentry(const wchar_t *args);
 
 /* ---- Public API (order matches tui_internal.h) ---- */
 
@@ -56,6 +70,7 @@ void tui_exec_command(void)
                 tui_state.scanner_inited = FALSE;
             }
             process_detach(&tui_state.target);
+            addr_table_set_target(&tui_state.address_table, NULL);
             tui_state.attached = FALSE;
             tui_set_status(L"Detached", FALSE);
         } else {
@@ -97,6 +112,48 @@ void tui_exec_command(void)
 
     if (wcsncmp(tui_state.cmd_buf, L"strenc ", CMD_STRENC_PREFIX) == 0) {
         cmd_strenc(tui_state.cmd_buf + CMD_STRENC_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"addentry ", CMD_ADDENTRY_PREFIX) == 0) {
+        cmd_addentry(tui_state.cmd_buf + CMD_ADDENTRY_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"delentry ", CMD_DELENTRY_PREFIX) == 0) {
+        cmd_delentry(tui_state.cmd_buf + CMD_DELENTRY_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"entrylabel ", CMD_ENTRYLABEL_PREFIX) == 0) {
+        cmd_entrylabel(tui_state.cmd_buf + CMD_ENTRYLABEL_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"lockentry ", CMD_LOCKENTRY_PREFIX) == 0) {
+        cmd_lockentry(tui_state.cmd_buf + CMD_LOCKENTRY_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"unlockentry ", CMD_UNLOCKENTRY_PREFIX) == 0) {
+        cmd_unlockentry(tui_state.cmd_buf + CMD_UNLOCKENTRY_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"saveentry ", CMD_SAVEENTRY_PREFIX) == 0) {
+        cmd_saveentry(tui_state.cmd_buf + CMD_SAVEENTRY_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"loadentry ", CMD_LOADENTRY_PREFIX) == 0) {
+        cmd_loadentry(tui_state.cmd_buf + CMD_LOADENTRY_PREFIX);
         tui_state.cmd_len = 0;
         return;
     }
@@ -306,4 +363,258 @@ static void cmd_strenc(const wchar_t *args)
     } else {
         tui_set_status(L"usage: strenc ascii|utf16", TRUE);
     }
+}
+
+static int parse_wtype(const wchar_t *name, ScanType *out)
+{
+    if (wcscmp(name, L"i32")    == 0) { *out = SCAN_TYPE_I32;    return 1; }
+    if (wcscmp(name, L"i8")     == 0) { *out = SCAN_TYPE_I8;     return 1; }
+    if (wcscmp(name, L"i16")    == 0) { *out = SCAN_TYPE_I16;    return 1; }
+    if (wcscmp(name, L"i64")    == 0) { *out = SCAN_TYPE_I64;    return 1; }
+    if (wcscmp(name, L"u8")     == 0) { *out = SCAN_TYPE_U8;     return 1; }
+    if (wcscmp(name, L"u16")    == 0) { *out = SCAN_TYPE_U16;    return 1; }
+    if (wcscmp(name, L"u32")    == 0) { *out = SCAN_TYPE_U32;    return 1; }
+    if (wcscmp(name, L"u64")    == 0) { *out = SCAN_TYPE_U64;    return 1; }
+    if (wcscmp(name, L"f32")    == 0) { *out = SCAN_TYPE_F32;    return 1; }
+    if (wcscmp(name, L"f64")    == 0) { *out = SCAN_TYPE_F64;    return 1; }
+    if (wcscmp(name, L"string") == 0) { *out = SCAN_TYPE_STRING; return 1; }
+    if (wcscmp(name, L"aob")    == 0) { *out = SCAN_TYPE_AOB;    return 1; }
+    return 0;
+}
+
+static void cmd_addentry(const wchar_t *args)
+{
+    if (!tui_state.attached) {
+        tui_set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    unsigned long long address = 0;
+    wchar_t type_name[16] = {0};
+    int consumed = 0;
+
+    if (swscanf_s(args, L"%llx %15s %n", &address, type_name,
+                  (unsigned int)_countof(type_name), &consumed) < 2) {
+        tui_set_status(L"usage: addentry <hex_addr> <type> <label>", TRUE);
+        return;
+    }
+
+    ScanType type;
+    if (!parse_wtype(type_name, &type)) {
+        tui_set_status(L"usage: addentry <hex_addr> <type> <label>  type: i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|aob", TRUE);
+        return;
+    }
+
+    const wchar_t *label_start = args + consumed;
+    while (*label_start == L' ') label_start++;
+
+    if (*label_start == L'\0') {
+        tui_set_status(L"usage: addentry <hex_addr> <type> <label>", TRUE);
+        return;
+    }
+
+    size_t label_len = wcslen(label_start);
+    if (label_len >= ADDR_ENTRY_LABEL_MAX) label_len = ADDR_ENTRY_LABEL_MAX - 1;
+
+    char label_narrow[ADDR_ENTRY_LABEL_MAX];
+    for (size_t i = 0; i < label_len; i++) {
+        wchar_t wc = label_start[i];
+        label_narrow[i] = (wc > 127) ? '?' : (char)wc;
+    }
+    label_narrow[label_len] = '\0';
+
+    int idx = addr_table_add(&tui_state.address_table, label_narrow, type, (uintptr_t)address);
+    if (idx < 0) {
+        tui_set_status(L"Failed to add entry", TRUE);
+        return;
+    }
+
+    tui_state.address_table_selected = idx;
+    wchar_t msg[STATUS_MSG_MAX];
+    swprintf_s(msg, _countof(msg), L"Added entry %d: %S at 0x%llX", idx, label_narrow, address);
+    tui_set_status(msg, FALSE);
+}
+
+static void cmd_delentry(const wchar_t *args)
+{
+    int index = (int)_wtol(args);
+    if (index < 0 || (size_t)index >= tui_state.address_table.count) {
+        tui_set_status(L"usage: delentry <index>", TRUE);
+        return;
+    }
+
+    if (addr_table_remove(&tui_state.address_table, (size_t)index) != 0) {
+        tui_set_status(L"Failed to remove entry", TRUE);
+        return;
+    }
+
+    if (tui_state.address_table_selected >= (int)tui_state.address_table.count
+        && tui_state.address_table_selected > 0) {
+        tui_state.address_table_selected--;
+    }
+
+    tui_set_status(L"Entry removed", FALSE);
+}
+
+static void cmd_entrylabel(const wchar_t *args)
+{
+    int index = 0;
+    int consumed = 0;
+    if (swscanf_s(args, L"%d %n", &index, &consumed) != 1) {
+        tui_set_status(L"usage: entrylabel <index> <new_label>", TRUE);
+        return;
+    }
+
+    if (index < 0 || (size_t)index >= tui_state.address_table.count) {
+        tui_set_status(L"Invalid entry index", TRUE);
+        return;
+    }
+
+    const wchar_t *label_start = args + consumed;
+    while (*label_start == L' ') label_start++;
+    if (*label_start == L'\0') {
+        tui_set_status(L"usage: entrylabel <index> <new_label>", TRUE);
+        return;
+    }
+
+    size_t label_len = wcslen(label_start);
+    if (label_len >= ADDR_ENTRY_LABEL_MAX) label_len = ADDR_ENTRY_LABEL_MAX - 1;
+
+    char label_narrow[ADDR_ENTRY_LABEL_MAX];
+    for (size_t i = 0; i < label_len; i++) {
+        wchar_t wc = label_start[i];
+        label_narrow[i] = (wc > 127) ? '?' : (char)wc;
+    }
+    label_narrow[label_len] = '\0';
+
+    if (addr_table_rename(&tui_state.address_table, (size_t)index, label_narrow) != 0) {
+        tui_set_status(L"Failed to rename entry", TRUE);
+        return;
+    }
+
+    wchar_t msg[STATUS_MSG_MAX];
+    swprintf_s(msg, _countof(msg), L"Entry %d renamed to \"%S\"", index, label_narrow);
+    tui_set_status(msg, FALSE);
+}
+
+static void cmd_lockentry(const wchar_t *args)
+{
+    int index = 0;
+    int consumed = 0;
+    if (swscanf_s(args, L"%d %n", &index, &consumed) != 1) {
+        tui_set_status(L"usage: lockentry <index> <value>", TRUE);
+        return;
+    }
+
+    if (index < 0 || (size_t)index >= tui_state.address_table.count) {
+        tui_set_status(L"Invalid entry index", TRUE);
+        return;
+    }
+
+    const AddrEntry *entry = &tui_state.address_table.entries[index];
+    if (entry->value_width == 0) {
+        tui_set_status(L"Cannot lock entry with variable/unknown width", TRUE);
+        return;
+    }
+
+    const wchar_t *value_str = args + consumed;
+    while (*value_str == L' ') value_str++;
+    if (*value_str == L'\0') {
+        tui_set_status(L"usage: lockentry <index> <value>", TRUE);
+        return;
+    }
+
+    ScanValue sv;
+    memset(&sv, 0, sizeof(sv));
+    sv.type = entry->type;
+    if (!tui_parse_scan_value(value_str, &sv)) {
+        tui_set_status(L"Could not parse lock value for this entry's type", TRUE);
+        return;
+    }
+
+    if (addr_table_lock(&tui_state.address_table, (size_t)index, sv.bytes) != 0) {
+        tui_set_status(L"Failed to lock entry", TRUE);
+        return;
+    }
+
+    wchar_t msg[STATUS_MSG_MAX];
+    swprintf_s(msg, _countof(msg), L"Entry %d locked", index);
+    tui_set_status(msg, FALSE);
+}
+
+static void cmd_unlockentry(const wchar_t *args)
+{
+    int index = (int)_wtol(args);
+    if ((unsigned int)index >= tui_state.address_table.count) {
+        tui_set_status(L"usage: unlockentry <index>", TRUE);
+        return;
+    }
+
+    if (addr_table_unlock(&tui_state.address_table, (size_t)index) != 0) {
+        tui_set_status(L"Failed to unlock entry", TRUE);
+        return;
+    }
+
+    wchar_t msg[STATUS_MSG_MAX];
+    swprintf_s(msg, _countof(msg), L"Entry %d unlocked", index);
+    tui_set_status(msg, FALSE);
+}
+
+static void cmd_saveentry(const wchar_t *args)
+{
+    while (*args == L' ') args++;
+    if (*args == L'\0') {
+        tui_set_status(L"usage: saveentry <filename>", TRUE);
+        return;
+    }
+
+    char filename_narrow[260];
+    size_t flen = wcslen(args);
+    if (flen >= sizeof(filename_narrow)) flen = sizeof(filename_narrow) - 1;
+    for (size_t i = 0; i < flen; i++) {
+        wchar_t wc = args[i];
+        filename_narrow[i] = (wc > 127) ? '_' : (char)wc;
+    }
+    filename_narrow[flen] = '\0';
+
+    if (!addr_table_save(&tui_state.address_table, filename_narrow)) {
+        tui_set_status(L"Failed to save address table", TRUE);
+        return;
+    }
+
+    wchar_t msg[STATUS_MSG_MAX];
+    swprintf_s(msg, _countof(msg), L"Saved %llu entries to \"%s\"",
+               (unsigned long long)tui_state.address_table.count, args);
+    tui_set_status(msg, FALSE);
+}
+
+static void cmd_loadentry(const wchar_t *args)
+{
+    while (*args == L' ') args++;
+    if (*args == L'\0') {
+        tui_set_status(L"usage: loadentry <filename>", TRUE);
+        return;
+    }
+
+    char filename_narrow[260];
+    size_t flen = wcslen(args);
+    if (flen >= sizeof(filename_narrow)) flen = sizeof(filename_narrow) - 1;
+    for (size_t i = 0; i < flen; i++) {
+        wchar_t wc = args[i];
+        filename_narrow[i] = (wc > 127) ? '_' : (char)wc;
+    }
+    filename_narrow[flen] = '\0';
+
+    if (!addr_table_load(&tui_state.address_table, filename_narrow)) {
+        tui_set_status(L"Failed to load address table -- malformed file", TRUE);
+        return;
+    }
+
+    tui_state.address_table_selected = 0;
+    tui_state.address_table_scroll = 0;
+
+    wchar_t msg[STATUS_MSG_MAX];
+    swprintf_s(msg, _countof(msg), L"Loaded %llu entries from \"%s\"",
+               (unsigned long long)tui_state.address_table.count, args);
+    tui_set_status(msg, FALSE);
 }

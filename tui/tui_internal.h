@@ -13,6 +13,7 @@
 
 #include "core/process/process.h"
 #include "core/scanner/scanner.h"
+#include "core/address_table/address_table.h"
 #include "tui/help.h"
 
 /* Sizes shared by the tui_state definition (tui.c) and the helpers that touch
@@ -49,6 +50,13 @@ typedef struct {
     ScanSession scanner;
     int         scanner_inited;
     int         string_enc;
+
+    AddrTable  address_table;
+    int        address_table_scroll;
+    int        address_table_selected;
+    ULONGLONG  address_table_last_refresh;
+    ULONGLONG  address_table_last_lock;
+    int        scanner_selected_index;
 
     int             help_open;
     int             help_tab;

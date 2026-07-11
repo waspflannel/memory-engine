@@ -63,6 +63,12 @@ int tui_do_attach(DWORD pid)
     tui_state.attached = TRUE;
     scanner_session_init(&tui_state.scanner, &tui_state.target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
     tui_state.scanner_inited = TRUE;
+
+    addr_table_set_target(&tui_state.address_table, &tui_state.target);
+    tui_state.address_table_last_refresh = 0;
+    tui_state.address_table_last_lock = 0;
+    tui_state.scanner_selected_index = 0;
+
     wchar_t msg[PROCESS_NAME_MAX + 32];
     swprintf_s(msg, _countof(msg), L"Attached to %s (PID %u)", tui_state.target.name, pid);
     tui_set_status(msg, FALSE);
