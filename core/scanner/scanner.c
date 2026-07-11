@@ -118,6 +118,7 @@ PlatformError scanner_find_hits(const ScanSession *session, const ScanRegion *re
 
 PlatformError scanner_first_scan(ScanSession *session)
 {
+    /* ---- validate ---- */
     if (!session || !session->target || !session->target->handle) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
@@ -131,9 +132,10 @@ PlatformError scanner_first_scan(ScanSession *session)
         return PLATFORM_ERR_INVALID_PARAM;   /* no value set */
     }
 
-    /* A first scan discards any prior result set entirely. */
+    /* Discard any prior result set — a first scan is always a clean start. */
     results_free(&session->results);
 
+    /* ---- enumerate every committed, accessible region in the target ---- */
     ScanRegion *regions = NULL;
     size_t region_count = 0;
     PlatformError err = scanner_list_regions(session->target, &regions, &region_count);
@@ -141,11 +143,13 @@ PlatformError scanner_first_scan(ScanSession *session)
         return err;
     }
 
+    /* ---- decide threading: single-threaded under 4 regions, up to 8 otherwise ---- */
     int nthreads = 1;
     if (region_count >= 4) {
         nthreads = (int)(region_count < SCAN_MAX_THREADS ? region_count : SCAN_MAX_THREADS);
     }
 
+    /* ---- single-threaded path: scan all regions directly ---- */
     if (nthreads == 1) {
         PlatformError e = match_regions(session, regions, region_count, width, &session->results);
         scanner_free_regions(regions);
@@ -156,10 +160,12 @@ PlatformError scanner_first_scan(ScanSession *session)
         return PLATFORM_OK;
     }
 
+    /* ---- multi-threaded path: partition regions across workers ---- */
     ScanWork works[SCAN_MAX_THREADS];
     thrd_t   tids[SCAN_MAX_THREADS];
     int      started[SCAN_MAX_THREADS] = {0};
 
+    /* Give each thread a disjoint slice of the regions array. */
     for (int i = 0; i < nthreads; i++) {
         size_t start = (size_t)i * region_count / (size_t)nthreads;
         size_t end   = (size_t)(i + 1) * region_count / (size_t)nthreads;
@@ -171,6 +177,7 @@ PlatformError scanner_first_scan(ScanSession *session)
         results_init(&works[i].results);
     }
 
+    /* Spawn threads; fall back to running inline if thread creation fails. */
     for (int i = 0; i < nthreads; i++) {
         if (thrd_create(&tids[i], worker_fn, &works[i]) == thrd_success) {
             started[i] = 1;
@@ -179,6 +186,8 @@ PlatformError scanner_first_scan(ScanSession *session)
                                          works[i].width, &works[i].results);
         }
     }
+
+    /* Wait for every spawned thread to finish. */
     for (int i = 0; i < nthreads; i++) {
         if (started[i]) {
             int dummy;
@@ -186,6 +195,7 @@ PlatformError scanner_first_scan(ScanSession *session)
         }
     }
 
+    /* If any worker reported an error, clean up and bail out. */
     PlatformError worst = PLATFORM_OK;
     for (int i = 0; i < nthreads; i++) {
         if (works[i].err != PLATFORM_OK) {
@@ -198,6 +208,7 @@ PlatformError scanner_first_scan(ScanSession *session)
         return worst;
     }
 
+    /* Merge every worker's hits into a single result set owned by the session. */
     PlatformError me = merge_worker_results(works, nthreads, width, &session->results);
     scanner_free_regions(regions);
     if (me != PLATFORM_OK) {
