@@ -830,6 +830,14 @@ static void handle_key(WORD vk, WCHAR ch)
                            tui_state.address_table_selected);
                 tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
                 tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'?') {
+                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+                if (book) {
+                    tui_state.help_book = book;
+                    tui_state.help_open = 1;
+                    tui_state.help_tab = 0;
+                    tui_state.help_scroll = 0;
+                }
             }
         }
         if (vk == VK_ESCAPE) {
