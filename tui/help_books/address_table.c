@@ -16,23 +16,38 @@ static const HelpEntry addr_lock_entries[] = {
 };
 
 static const HelpEntry addr_manage_entries[] = {
-    { L"addentry",        L"`addentry <hex_addr> <type> <label>` -- add a manual entry. Type is one of i8/i16/i32/i64/u8/u16/u32/u64/f32/f64/string/aob." },
-    { L"delentry / d",    L"`delentry <index>` or select and press `d` to remove an entry from the table." },
-    { L"entrylabel / e",  L"`entrylabel <index> <new_label>` or select and press `e` to rename an entry." },
-    { L"saveentry",       L"`saveentry <filename>` -- persist the table to a file. Format is human-readable text with quoted labels and hex addresses." },
-    { L"loadentry",       L"`loadentry <filename>` -- restore a saved table. A malformed file fails loudly instead of silently dropping entries." },
+    { L"attach <pid>",      L"attach to a running process by its numeric PID -- required before any address can be read, written, or scanned" },
+    { L"detach",            L"detach from the current process and tear down the scanner session; the table itself is preserved" },
+    { L"search <name>",     L"filter the Processes panel to image names containing <name> (case-insensitive); `search` alone clears the filter" },
+    { L"read <addr> <n>",   L"read `n` bytes (1-512) from a hex address in the target; bytes are shown in the status bar as hex. On the Address Table panel, press `r` on a selected entry to pre-fill `read <addr> `." },
+    { L"write <addr> <hex>",L"write raw hex bytes to an address in the target process. On the Address Table panel, press `w` on a selected entry to pre-fill `write <addr> `." },
+    { L"scan <value>",      L"first scan: walk every readable byte and keep addresses matching the value for the current type (Scanner panel)" },
+    { L"next <value>",      L"next scan: re-read surviving addresses, keeping those that still match (Scanner panel)" },
+    { L"type <name>",       L"set the value type -- i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|aob (Scanner panel)" },
+    { L"strenc a|u",        L"set string encoding to `ascii` or `utf16` for string scans" },
+    { L"addentry",          L"`addentry <hex_addr> <type> <label>` -- add a memory address to the address table for live tracking" },
+    { L"delentry / d",      L"`delentry <index>` or select and press `d` to remove an entry from the table." },
+    { L"entrylabel / e",    L"`entrylabel <index> <new_label>` or select and press `e` to rename an entry." },
+    { L"lockentry / l",     L"`lockentry <index> <value>` -- write a fixed value to an entry every 50 ms (infinite health/ammo). Or select and press `l` to pre-fill the command bar." },
+    { L"unlockentry / u",   L"`unlockentry <index>` -- stop the lock loop on an entry so its value moves freely again. Or select and press `u`." },
+    { L"saveentry",         L"`saveentry <filename>` -- persist the table to a human-readable text file with quoted labels and hex addresses." },
+    { L"loadentry",         L"`loadentry <filename>` -- restore a saved table. A malformed file fails loudly instead of silently dropping entries." },
     { L"persistence",     L"Entries survive attach/detach cycles. They remain in the table even with no process attached, showing `no process` for values." },
+    { L"help / ?",          L"open this help book for the focused panel" },
+    { L"quit / exit",       L"close the memory engine" },
 };
 
 static const HelpEntry addr_keys_entries[] = {
-    { L"Up / Down",       L"Move selection cursor through entries" },
-    { L"d",               L"Delete the selected entry" },
-    { L"l",               L"Lock the selected entry (opens the command bar with `lockentry <index> ` pre-filled)" },
-    { L"u",               L"Unlock the selected entry" },
-    { L"e",               L"Rename the selected entry (opens the command bar pre-filled)" },
-    { L"?",               L"Open this help book" },
-    { L"Esc",             L"Return focus to the sidebar panel selector" },
-    { L"Tab",             L"Cycle focus between sidebar, panel, and command bar" },
+    { L"Up / Down", L"Move selection cursor through entries" },
+    { L"d",         L"Delete the selected entry" },
+    { L"l",         L"Lock the selected entry (opens the command bar with `lockentry <index> ` pre-filled)" },
+    { L"u",         L"Unlock the selected entry" },
+    { L"e",         L"Rename the selected entry (opens the command bar pre-filled)" },
+    { L"r",         L"Read the selected entry's address -- opens the command bar pre-filled with `read <addr> ` (type the byte count, 1-512, then Enter)" },
+    { L"w",         L"Write to the selected entry's address -- opens the command bar pre-filled with `write <addr> ` (type hex byte pairs, then Enter)" },
+    { L"?",         L"Open this help book" },
+    { L"Esc",       L"Return focus to the sidebar panel selector" },
+    { L"Tab",       L"Cycle focus between sidebar, panel, and command bar" },
 };
 
 static const HelpPage addr_pages[] = {

@@ -857,6 +857,27 @@ static void handle_key(WORD vk, WCHAR ch)
                            tui_state.address_table_selected);
                 tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
                 tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'r' && count > 0) {
+                /* Read the selected entry's address -- opens the command bar
+                   pre-filled with `read <addr> `; type the byte count (1-512)
+                   and Enter. Mirrors the `r` shortcut on the Scanner panel so
+                   the same muscle memory works on either page. */
+                unsigned long long addr = tui_state.address_table.entries[tui_state.address_table_selected].address;
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"read %llX ", addr);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'w' && count > 0) {
+                /* Write to the selected entry's address -- opens the command
+                   bar pre-filled with `write <addr> `; type hex byte pairs and
+                   Enter. Same contract as the Scanner `w` shortcut. */
+                unsigned long long addr = tui_state.address_table.entries[tui_state.address_table_selected].address;
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"write %llX ", addr);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
             } else if (ch == L'?') {
                 const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
                 if (book) {
