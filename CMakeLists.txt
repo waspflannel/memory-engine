@@ -12,6 +12,9 @@ add_executable(memforge
     tui/helpers.c
     tui/render.c
     tui/help.c
+    tui/help_books/processes.c
+    tui/help_books/scanner.c
+    tui/help_books/address_table.c
     core/process/process.c
     core/memory/memory.c
     core/scanner/scanner.c
