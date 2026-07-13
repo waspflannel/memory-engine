@@ -133,7 +133,7 @@ int main(void)
     printf("--- T1: i32 exact first scan + threaded/single equality ---\n");
     {
         ScanSession s;
-        scanner_session_init(&s, &target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
+        scanner_session_init(&s, &target, SCAN_TYPE_I32);
         int v = 100;
         scanner_value_set(&s.param, SCAN_TYPE_I32, &v, sizeof(v));
 
@@ -166,7 +166,7 @@ int main(void)
     printf("--- T2: exact narrowing after a value change ---\n");
     {
         ScanSession s;
-        scanner_session_init(&s, &target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
+        scanner_session_init(&s, &target, SCAN_TYPE_I32);
         int v100 = 100;
         scanner_value_set(&s.param, SCAN_TYPE_I32, &v100, sizeof(v100));
         check(scanner_first_scan(&s) == PLATFORM_OK, "first scan for 100");
@@ -187,13 +187,11 @@ int main(void)
         scanner_session_destroy(&s);
     }
 
-    printf("--- T3: bad-mode first scan fails loud (only exact is valid) ---\n");
+    printf("--- T3: first scan requires an explicit value ---\n");
     {
         ScanSession s;
-        int bad_mode = SCAN_MODE_EXACT + 1;
-        scanner_session_init(&s, &target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
-        s.mode = (ScanMode)bad_mode;
-        check(scanner_first_scan(&s) != PLATFORM_OK, "first scan rejects non-exact mode");
+        scanner_session_init(&s, &target, SCAN_TYPE_I32);
+        check(scanner_first_scan(&s) != PLATFORM_OK, "first scan rejects an unset value");
         check(s.has_results == 0 && s.results.count == 0, "failed first scan leaves no result set");
         scanner_session_destroy(&s);
     }
@@ -201,7 +199,7 @@ int main(void)
     printf("--- T4: f32 spot check ---\n");
     {
         ScanSession s;
-        scanner_session_init(&s, &target, SCAN_TYPE_F32, SCAN_MODE_EXACT);
+        scanner_session_init(&s, &target, SCAN_TYPE_F32);
         float v = 1.5f;
         scanner_value_set(&s.param, SCAN_TYPE_F32, &v, sizeof(v));
         scanner_first_scan(&s);
@@ -212,14 +210,14 @@ int main(void)
     printf("--- T5: u32 and i64 spot checks ---\n");
     {
         ScanSession s;
-        scanner_session_init(&s, &target, SCAN_TYPE_U32, SCAN_MODE_EXACT);
+        scanner_session_init(&s, &target, SCAN_TYPE_U32);
         unsigned int v = 4294967295u;
         scanner_value_set(&s.param, SCAN_TYPE_U32, &v, sizeof(v));
         scanner_first_scan(&s);
         check(find_addr(&s.results, u32_addr), "u32 first scan finds target_counter_u32");
         scanner_session_destroy(&s);
 
-        scanner_session_init(&s, &target, SCAN_TYPE_I64, SCAN_MODE_EXACT);
+        scanner_session_init(&s, &target, SCAN_TYPE_I64);
         long long v64 = 0x123456789ABCll;
         scanner_value_set(&s.param, SCAN_TYPE_I64, &v64, sizeof(v64));
         scanner_first_scan(&s);
@@ -230,7 +228,7 @@ int main(void)
     printf("--- T6: ASCII string scan ---\n");
     {
         ScanSession s;
-        scanner_session_init(&s, &target, SCAN_TYPE_STRING, SCAN_MODE_EXACT);
+        scanner_session_init(&s, &target, SCAN_TYPE_STRING);
         const char *text = "MemForgeASCII";
         scanner_value_set(&s.param, SCAN_TYPE_STRING, text, strlen(text));
         scanner_first_scan(&s);
@@ -241,7 +239,7 @@ int main(void)
     printf("--- T7: UTF-16 string scan + AOB with wildcards ---\n");
     {
         ScanSession s;
-        scanner_session_init(&s, &target, SCAN_TYPE_STRING, SCAN_MODE_EXACT);
+        scanner_session_init(&s, &target, SCAN_TYPE_STRING);
         unsigned char u16[20] = {
             0x54,0x00, 0x65,0x00, 0x73,0x00, 0x74,0x00, 0x54,0x00,
             0x61,0x00, 0x72,0x00, 0x67,0x00, 0x65,0x00, 0x74,0x00,
@@ -251,7 +249,7 @@ int main(void)
         check(find_addr(&s.results, name_addr), "UTF-16 string scan finds target_name");
         scanner_session_destroy(&s);
 
-        scanner_session_init(&s, &target, SCAN_TYPE_AOB, SCAN_MODE_EXACT);
+        scanner_session_init(&s, &target, SCAN_TYPE_AOB);
         unsigned char pat[10]  = { 0x54,0x00, 0,0, 0,0, 0x74,0x00, 0x54,0x00 };
         unsigned char wild[10] = { 0,0,      1,1, 1,1, 0,0,      0,0 };
         scanner_value_set(&s.param, SCAN_TYPE_AOB, pat, sizeof(pat));

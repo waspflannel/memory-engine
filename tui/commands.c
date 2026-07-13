@@ -285,8 +285,6 @@ static void cmd_scan(const wchar_t *args)
         tui_set_status(L"usage: scan <value>", TRUE);
         return;
     }
-    tui_state.scanner.mode = SCAN_MODE_EXACT;
-
     PlatformError err = scanner_first_scan(&tui_state.scanner);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
@@ -340,28 +338,18 @@ static void cmd_type(const wchar_t *args)
         return;
     }
 
+    char type_name[16];
+    size_t converted = 0;
     ScanType type;
-    if (wcscmp(args, L"i32") == 0)         type = SCAN_TYPE_I32;
-    else if (wcscmp(args, L"i8") == 0)     type = SCAN_TYPE_I8;
-    else if (wcscmp(args, L"i16") == 0)    type = SCAN_TYPE_I16;
-    else if (wcscmp(args, L"i64") == 0)    type = SCAN_TYPE_I64;
-    else if (wcscmp(args, L"u8") == 0)     type = SCAN_TYPE_U8;
-    else if (wcscmp(args, L"u16") == 0)    type = SCAN_TYPE_U16;
-    else if (wcscmp(args, L"u32") == 0)    type = SCAN_TYPE_U32;
-    else if (wcscmp(args, L"u64") == 0)    type = SCAN_TYPE_U64;
-    else if (wcscmp(args, L"f32") == 0)    type = SCAN_TYPE_F32;
-    else if (wcscmp(args, L"f64") == 0)    type = SCAN_TYPE_F64;
-    else if (wcscmp(args, L"string") == 0) type = SCAN_TYPE_STRING;
-    else if (wcscmp(args, L"aob") == 0)    type = SCAN_TYPE_AOB;
-    else {
+    if (wcstombs_s(&converted, type_name, sizeof(type_name), args, _TRUNCATE) != 0 ||
+        scanner_type_from_name(type_name, &type) != PLATFORM_OK) {
         tui_set_status(L"usage: type i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|aob", TRUE);
         return;
     }
 
-    /* Re-init for the new type: drops any prior result set and resets mode to
-       exact (a fresh type starts a fresh scan). The borrowed target pointer
-       is the same field in tui_state, so keep it. */
-    scanner_session_init(&tui_state.scanner, &tui_state.target, type, SCAN_MODE_EXACT);
+    /* A type change begins a fresh exact scan and releases prior hit storage. */
+    scanner_session_destroy(&tui_state.scanner);
+    scanner_session_init(&tui_state.scanner, &tui_state.target, type);
 
     wchar_t msg[64];
     swprintf_s(msg, _countof(msg), L"Type: %s", tui_scan_type_name(type));

@@ -165,6 +165,9 @@ PlatformError platform_query_region(void *handle, unsigned long long address, Pl
     SIZE_T ret = VirtualQueryEx((HANDLE)handle, (LPCVOID)(UINT_PTR)address, &mbi, sizeof(mbi));
 
     if (ret == 0) {
+        if (GetLastError() == ERROR_INVALID_PARAMETER) {
+            return PLATFORM_ERR_END_OF_ADDRESS_SPACE;
+        }
         return PLATFORM_ERR_QUERY_FAILED;
     }
 
@@ -228,11 +231,11 @@ PlatformError platform_enable_debug_privilege(void)
 
     /* AdjustTokenPrivileges can return TRUE yet leave the privilege unassigned;
        read GetLastError() before CloseHandle clobbers it. */
-    AdjustTokenPrivileges(token, FALSE, &tp, sizeof(tp), NULL, NULL);
+    BOOL adjusted = AdjustTokenPrivileges(token, FALSE, &tp, sizeof(tp), NULL, NULL);
     DWORD adjust_error = GetLastError();
     CloseHandle(token);
 
-    if (adjust_error != ERROR_SUCCESS) {
+    if (!adjusted || adjust_error != ERROR_SUCCESS) {
         return PLATFORM_ERR_PRIVILEGE_FAILED;
     }
 

@@ -85,7 +85,6 @@ void           tui_refresh_process_list(void);
 int            tui_do_attach(DWORD pid);
 void           tui_attach_to_selected(void);
 const wchar_t *tui_scan_type_name(ScanType type);
-const wchar_t *tui_scan_mode_name(ScanMode mode);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
 
 /* Process list filtering: list rebuilds `process_view` from `processes` using

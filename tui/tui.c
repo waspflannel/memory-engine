@@ -332,8 +332,8 @@ static void draw_scanner_panel(Screen *screen)
 
     const wchar_t *enc = s->param.type == SCAN_TYPE_STRING
         ? (tui_state.string_enc == 1 ? L"utf16" : L"ascii") : L"-";
-    swprintf_s(line, _countof(line), L"Scanner -- type: %s  mode: %s  enc: %s",
-               tui_scan_type_name(s->param.type), tui_scan_mode_name(s->mode), enc);
+    swprintf_s(line, _countof(line), L"Scanner -- type: %s  exact  enc: %s",
+               tui_scan_type_name(s->param.type), enc);
     screen_text(screen, main_x, row++, line, s_attr_normal);
 
     /* Hex byte dump of the current param (works for every type). */

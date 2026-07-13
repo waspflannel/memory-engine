@@ -89,6 +89,7 @@ int tui_do_attach(DWORD pid)
             scanner_session_destroy(&tui_state.scanner);
             tui_state.scanner_inited = FALSE;
         }
+        addr_table_set_target(&tui_state.address_table, NULL);
         process_detach(&tui_state.target);
         tui_state.attached = FALSE;
     }
@@ -104,7 +105,7 @@ int tui_do_attach(DWORD pid)
     }
 
     tui_state.attached = TRUE;
-    scanner_session_init(&tui_state.scanner, &tui_state.target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
+    scanner_session_init(&tui_state.scanner, &tui_state.target, SCAN_TYPE_I32);
     tui_state.scanner_inited = TRUE;
 
     addr_table_set_target(&tui_state.address_table, &tui_state.target);
@@ -129,29 +130,11 @@ void tui_attach_to_selected(void)
 
 const wchar_t *tui_scan_type_name(ScanType type)
 {
-    switch (type) {
-    case SCAN_TYPE_I32:    return L"i32";
-    case SCAN_TYPE_I8:     return L"i8";
-    case SCAN_TYPE_I16:    return L"i16";
-    case SCAN_TYPE_I64:    return L"i64";
-    case SCAN_TYPE_U8:     return L"u8";
-    case SCAN_TYPE_U16:    return L"u16";
-    case SCAN_TYPE_U32:    return L"u32";
-    case SCAN_TYPE_U64:    return L"u64";
-    case SCAN_TYPE_F32:    return L"f32";
-    case SCAN_TYPE_F64:    return L"f64";
-    case SCAN_TYPE_STRING: return L"string";
-    case SCAN_TYPE_AOB:    return L"aob";
-    default:               return L"?";
-    }
-}
-
-const wchar_t *tui_scan_mode_name(ScanMode mode)
-{
-    switch (mode) {
-    case SCAN_MODE_EXACT: return L"exact";
-    default:              return L"?";
-    }
+    static wchar_t name[16];
+    const char *canonical = scanner_type_name(type);
+    size_t converted = 0;
+    if (!canonical || mbstowcs_s(&converted, name, _countof(name), canonical, _TRUNCATE) != 0) return L"?";
+    return name;
 }
 
 int tui_parse_scan_value(const wchar_t *args, ScanValue *out)
@@ -164,42 +147,36 @@ int tui_parse_scan_value(const wchar_t *args, ScanValue *out)
         if (swscanf_s(args, L"%d", &x) != 1) return 0;
         if (out->type == SCAN_TYPE_I8  && (x < INT8_MIN  || x > INT8_MAX))  return 0;
         if (out->type == SCAN_TYPE_I16 && (x < INT16_MIN || x > INT16_MAX)) return 0;
-        scanner_value_set(out, out->type, &x, sizeof(x));
-        return 1;
+        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
     }
     case SCAN_TYPE_I64: {
         long long x = 0;
         if (swscanf_s(args, L"%lld", &x) != 1) return 0;
-        scanner_value_set(out, out->type, &x, sizeof(x));
-        return 1;
+        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
     }
     case SCAN_TYPE_U8:
     case SCAN_TYPE_U16:
     case SCAN_TYPE_U32: {
         unsigned int x = 0;
-        if (swscanf_s(args, L"%u", &x) != 1) return 0;
+        if (*args == L'-' || swscanf_s(args, L"%u", &x) != 1) return 0;
         if (out->type == SCAN_TYPE_U8  && x > UINT8_MAX)  return 0;
         if (out->type == SCAN_TYPE_U16 && x > UINT16_MAX) return 0;
-        scanner_value_set(out, out->type, &x, sizeof(x));
-        return 1;
+        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
     }
     case SCAN_TYPE_U64: {
         unsigned long long x = 0;
-        if (swscanf_s(args, L"%llu", &x) != 1) return 0;
-        scanner_value_set(out, out->type, &x, sizeof(x));
-        return 1;
+        if (*args == L'-' || swscanf_s(args, L"%llu", &x) != 1) return 0;
+        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
     }
     case SCAN_TYPE_F32: {
         float x = 0.0f;
         if (swscanf_s(args, L"%f", &x) != 1) return 0;
-        scanner_value_set(out, out->type, &x, sizeof(x));
-        return 1;
+        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
     }
     case SCAN_TYPE_F64: {
         double x = 0.0;
         if (swscanf_s(args, L"%lf", &x) != 1) return 0;
-        scanner_value_set(out, out->type, &x, sizeof(x));
-        return 1;
+        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
     }
     case SCAN_TYPE_STRING: return parse_string_value(args, out);
     case SCAN_TYPE_AOB:    return parse_aob_value(args, out);
@@ -251,9 +228,8 @@ static int parse_aob_value(const wchar_t *args, ScanValue *out)
 
     if (n == 0) return 0;
 
-    scanner_value_set(out, SCAN_TYPE_AOB, bytes, n);
-    scanner_value_set_wildcard(out, wild, n);
-    return 1;
+    return scanner_value_set(out, SCAN_TYPE_AOB, bytes, n) == PLATFORM_OK &&
+           scanner_value_set_wildcard(out, wild, n) == PLATFORM_OK;
 }
 
 static int parse_string_value(const wchar_t *args, ScanValue *out)
@@ -278,8 +254,7 @@ static int parse_string_value(const wchar_t *args, ScanValue *out)
         }
     }
 
-    scanner_value_set(out, SCAN_TYPE_STRING, bytes, n);
-    return 1;
+    return scanner_value_set(out, SCAN_TYPE_STRING, bytes, n) == PLATFORM_OK;
 }
 
 /* Case-insensitive substring search (ASCII-fold), since process image names

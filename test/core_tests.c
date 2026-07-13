@@ -98,7 +98,7 @@ static void test_scanner_boundary(void)
           "scanner_list_regions with NULL out-params fails");
 
     ScanSession session;
-    scanner_session_init(&session, &empty_target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
+    scanner_session_init(&session, &empty_target, SCAN_TYPE_I32);
     check(scanner_first_scan(NULL) != PLATFORM_OK, "scanner_first_scan NULL session fails");
     check(scanner_first_scan(&session) != PLATFORM_OK, "scanner_first_scan with empty target fails");
     check(scanner_next_scan(&session) != PLATFORM_OK, "scanner_next_scan without prior first scan fails");

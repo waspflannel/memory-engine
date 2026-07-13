@@ -17,6 +17,12 @@ PlatformError process_list(ProcessEntry **entries, unsigned int *count)
         return err;
     }
 
+    if (platform_count == 0) {
+        *entries = NULL;
+        *count = 0;
+        return PLATFORM_OK;
+    }
+
     ProcessEntry *list = (ProcessEntry *)malloc(platform_count * sizeof(ProcessEntry));
     if (!list) {
         platform_free_process_list(platform_entries);
@@ -43,7 +49,7 @@ PlatformError process_attach(unsigned int pid, Target *target)
 {
     if (!target) return PLATFORM_ERR_INVALID_PARAM;
 
-    memset(target, 0, sizeof(*target));
+    process_detach(target);
 
     void *handle = NULL;
     PlatformError err = platform_open_process(pid, &handle);
@@ -58,7 +64,7 @@ PlatformError process_attach(unsigned int pid, Target *target)
     err = platform_get_main_module(handle, &module_info);
     if (err != PLATFORM_OK) {
         platform_close_handle(handle);
-        target->handle = NULL;
+        memset(target, 0, sizeof(*target));
         return err;
     }
 
@@ -71,10 +77,9 @@ PlatformError process_attach(unsigned int pid, Target *target)
 
 void process_detach(Target *target)
 {
-    if (target && target->handle) {
-        platform_close_handle(target->handle);
-        memset(target, 0, sizeof(*target));
-    }
+    if (!target) return;
+    if (target->handle) platform_close_handle(target->handle);
+    memset(target, 0, sizeof(*target));
 }
 
 PlatformError process_enable_privilege(void)
@@ -96,6 +101,7 @@ const char *process_error_string(PlatformError err)
     case PLATFORM_ERR_PARTIAL_WRITE:   return "partial write to target memory";
     case PLATFORM_ERR_WRITE_FAILED:    return "failed to write target memory";
     case PLATFORM_ERR_QUERY_FAILED:    return "failed to query memory region";
+    case PLATFORM_ERR_END_OF_ADDRESS_SPACE: return "end of target address space";
     case PLATFORM_ERR_PRIVILEGE_FAILED: return "failed to enable debug privilege";
     case PLATFORM_ERR_INTERNAL:        return "internal error (out of memory)";
     default:                           return "unknown error";

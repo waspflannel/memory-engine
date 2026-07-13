@@ -7,7 +7,8 @@ PlatformError memory_read(const Target *target, unsigned long long address, void
     }
 
     size_t bytes_read = 0;
-    return platform_read_memory(target->handle, address, buffer, size, &bytes_read);
+    PlatformError err = platform_read_memory(target->handle, address, buffer, size, &bytes_read);
+    return err == PLATFORM_OK && bytes_read != size ? PLATFORM_ERR_PARTIAL_READ : err;
 }
 
 PlatformError memory_write(const Target *target, unsigned long long address, const void *buffer, size_t size)
@@ -17,7 +18,8 @@ PlatformError memory_write(const Target *target, unsigned long long address, con
     }
 
     size_t bytes_written = 0;
-    return platform_write_memory(target->handle, address, buffer, size, &bytes_written);
+    PlatformError err = platform_write_memory(target->handle, address, buffer, size, &bytes_written);
+    return err == PLATFORM_OK && bytes_written != size ? PLATFORM_ERR_PARTIAL_WRITE : err;
 }
 
 PlatformError memory_query(const Target *target, unsigned long long address, MemoryRegion *region)
