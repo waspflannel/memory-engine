@@ -13,6 +13,8 @@ static int parse_aob_value(const wchar_t *args, ScanValue *out);
 static int parse_string_value(const wchar_t *args, ScanValue *out);
 static int is_hex_wchar(wchar_t c);
 static int hex_wchar_value(wchar_t c);
+static int wcsstr_icase(const wchar_t *hay, const wchar_t *needle);
+static void tui_rebuild_process_view(void);
 
 /* ---- Public API (order matches tui_internal.h) ---- */
 
@@ -37,6 +39,47 @@ void tui_refresh_process_list(void)
     if (err != PLATFORM_OK) {
         tui_set_status(L"Failed to list processes", TRUE);
     }
+
+    /* Preserve any active filter (e.g. an F5 refresh after launching the
+       target): rebuild the view against the freshly fetched process list. */
+    tui_rebuild_process_view();
+}
+
+void tui_set_process_filter(const wchar_t *needle)
+{
+    wcsncpy_s(tui_state.process_filter, PROCESS_NAME_MAX, needle, _TRUNCATE);
+    tui_state.selected_process = 0;
+    tui_state.process_scroll = 0;
+    tui_rebuild_process_view();
+
+    if (tui_state.process_filter[0] == L'\0') {
+        tui_set_status(L"Filter cleared", FALSE);
+        return;
+    }
+    if (tui_state.process_view_count == 0) {
+        wchar_t msg[PROCESS_NAME_MAX + 32];
+        swprintf_s(msg, _countof(msg), L"No processes match \"%s\"", needle);
+        tui_set_status(msg, TRUE);
+        return;
+    }
+    wchar_t msg[PROCESS_NAME_MAX + 64];
+    swprintf_s(msg, _countof(msg), L"Filter \"%s\": %u of %u processes",
+               needle, tui_state.process_view_count, tui_state.process_count);
+    tui_set_status(msg, FALSE);
+}
+
+void tui_clear_process_filter(void)
+{
+    tui_state.process_filter[0] = L'\0';
+    tui_state.selected_process = 0;
+    tui_state.process_scroll = 0;
+    tui_rebuild_process_view();
+    tui_set_status(L"Filter cleared", FALSE);
+}
+
+int tui_process_filter_active(void)
+{
+    return tui_state.process_filter[0] != L'\0';
 }
 
 int tui_do_attach(DWORD pid)
@@ -77,10 +120,11 @@ int tui_do_attach(DWORD pid)
 
 void tui_attach_to_selected(void)
 {
-    if (!tui_state.processes || tui_state.process_count == 0) return;
-    if ((unsigned int)tui_state.selected_process >= tui_state.process_count) return;
+    if (!tui_state.processes || tui_state.process_view_count == 0) return;
+    if ((unsigned int)tui_state.selected_process >= tui_state.process_view_count) return;
 
-    tui_do_attach(tui_state.processes[tui_state.selected_process].pid);
+    unsigned int idx = tui_state.process_view[tui_state.selected_process];
+    tui_do_attach(tui_state.processes[idx].pid);
 }
 
 const wchar_t *tui_scan_type_name(ScanType type)
@@ -236,4 +280,71 @@ static int parse_string_value(const wchar_t *args, ScanValue *out)
 
     scanner_value_set(out, SCAN_TYPE_STRING, bytes, n);
     return 1;
+}
+
+/* Case-insensitive substring search (ASCII-fold), since process image names
+   are typically ASCII on Windows but case varies between `chrome.exe` and
+   `Chrome.exe`. Returns nonzero if `needle` is found inside `hay`. */
+static int wcsstr_icase(const wchar_t *hay, const wchar_t *needle)
+{
+    if (!needle || !*needle) return 1;
+
+    for (const wchar_t *p = hay; *p; p++) {
+        const wchar_t *h = p;
+        const wchar_t *n = needle;
+        while (*h && *n) {
+            wchar_t hc = (*h >= L'A' && *h <= L'Z') ? (wchar_t)(*h + 32) : *h;
+            wchar_t nc = (*n >= L'A' && *n <= L'Z') ? (wchar_t)(*n + 32) : *n;
+            if (hc != nc) break;
+            h++; n++;
+        }
+        if (*n == L'\0') return 1;
+    }
+    return 0;
+}
+
+/* Rebuilds `process_view` from `processes` using the current `process_filter`
+   substring. Empty filter -> identity view (every process shown). The caller
+   is responsible for resetting selection/scroll -- this only touches the view
+   array so an F5 refresh can reuse it without dropping the filter. */
+static void tui_rebuild_process_view(void)
+{
+    if (tui_state.process_view) {
+        free(tui_state.process_view);
+        tui_state.process_view = NULL;
+    }
+    tui_state.process_view_count = 0;
+
+    if (tui_state.process_count == 0) return;
+
+    tui_state.process_view =
+        malloc(tui_state.process_count * sizeof(unsigned int));
+    if (!tui_state.process_view) {
+        tui_set_status(L"Out of memory building process filter", TRUE);
+        return;
+    }
+
+    int has_filter = (tui_state.process_filter[0] != L'\0');
+    unsigned int n = 0;
+    for (unsigned int i = 0; i < tui_state.process_count; i++) {
+        if (has_filter && !wcsstr_icase(tui_state.processes[i].name,
+                                        tui_state.process_filter)) {
+            continue;
+        }
+        tui_state.process_view[n++] = i;
+    }
+    tui_state.process_view_count = n;
+
+    /* If narrowing dropped the selection (or the list grew on refresh so the
+       selection points past the new view), clamp it back inside. */
+    if ((unsigned int)tui_state.selected_process > tui_state.process_view_count) {
+        tui_state.selected_process = 0;
+        tui_state.process_scroll = 0;
+    }
+    if (tui_state.selected_process > 0 &&
+        (unsigned int)tui_state.selected_process >= tui_state.process_view_count) {
+        tui_state.selected_process =
+            tui_state.process_view_count > 0
+                ? (int)tui_state.process_view_count - 1 : 0;
+    }
 }

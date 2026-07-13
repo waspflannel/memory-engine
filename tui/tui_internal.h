@@ -41,7 +41,10 @@ typedef struct {
 
     ProcessEntry *processes;
     unsigned int   process_count;
-    int            selected_process;
+    unsigned int  *process_view;     /* indexes into `processes` that pass the filter */
+    unsigned int   process_view_count;
+    wchar_t        process_filter[PROCESS_NAME_MAX]; /* empty == no filter */
+    int            selected_process;   /* index into process_view */
     int            process_scroll;
 
     Target  target;
@@ -84,6 +87,13 @@ void           tui_attach_to_selected(void);
 const wchar_t *tui_scan_type_name(ScanType type);
 const wchar_t *tui_scan_mode_name(ScanMode mode);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
+
+/* Process list filtering: list rebuilds `process_view` from `processes` using
+   the current `process_filter` substring (case-insensitive). An empty needle
+   produces the identity view (every process shown). */
+void           tui_set_process_filter(const wchar_t *needle);
+void           tui_clear_process_filter(void);
+int            tui_process_filter_active(void);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
 void           tui_exec_command(void);

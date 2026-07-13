@@ -164,6 +164,10 @@ void tui_shutdown(void)
         process_free_list(tui_state.processes);
         tui_state.processes = NULL;
     }
+    if (tui_state.process_view) {
+        free(tui_state.process_view);
+        tui_state.process_view = NULL;
+    }
 
     DWORD written;
     COORD zero = {0, 0};
@@ -254,7 +258,7 @@ static void draw_process_list(Screen *screen)
     int vis_rows = (tui_state.height - 3) - CONTENT_START;
     if (vis_rows <= 0) return;
 
-    int max_scroll = (int)tui_state.process_count - vis_rows;
+    int max_scroll = (int)tui_state.process_view_count - vis_rows;
     if (max_scroll < 0) max_scroll = 0;
     if (tui_state.process_scroll > max_scroll) tui_state.process_scroll = max_scroll;
     if (tui_state.process_scroll < 0) tui_state.process_scroll = 0;
@@ -263,9 +267,9 @@ static void draw_process_list(Screen *screen)
     for (int i = 0; i < vis_rows; i++) {
         int pi = tui_state.process_scroll + i;
         int row = CONTENT_START + i;
-        if ((unsigned int)pi >= tui_state.process_count) break;
+        if ((unsigned int)pi >= tui_state.process_view_count) break;
 
-        ProcessEntry *entry = &tui_state.processes[pi];
+        ProcessEntry *entry = &tui_state.processes[tui_state.process_view[pi]];
         swprintf_s(line, _countof(line), L"%5u  %s", entry->pid, entry->name);
         WORD attr;
         if (pi == tui_state.selected_process && tui_state.focus == FOCUS_MAIN) {
@@ -292,10 +296,16 @@ static void draw_main_panel(Screen *screen)
     int main_x = sb_end + 1;
 
     if (tui_state.panel == PANEL_PROCESSES) {
-        if (tui_state.process_count > 0) {
-            draw_process_list(screen);
-        } else {
+        if (tui_state.process_count == 0) {
             screen_text(screen, main_x, CONTENT_START, L"Loading process list...", s_attr_normal);
+        } else if (tui_state.process_view_count == 0) {
+            wchar_t hint[PROCESS_NAME_MAX + 48];
+            swprintf_s(hint, _countof(hint),
+                       L"No processes match \"%s\"  (Esc clears, F5 refreshes)",
+                       tui_state.process_filter);
+            screen_text(screen, main_x, CONTENT_START, hint, s_attr_normal);
+        } else {
+            draw_process_list(screen);
         }
     } else if (tui_state.panel == PANEL_SCANNER) {
         draw_scanner_panel(screen);
@@ -761,10 +771,18 @@ static void handle_key(WORD vk, WCHAR ch)
                     tui_state.help_tab = 0;
                     tui_state.help_scroll = 0;
                 }
+            } else if (ch == L'/') {
+                /* Jump to the command bar pre-filled with `search ` so the
+                   user can type a substring and Enter to filter the list. */
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"search ");
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
             } else if (vk == VK_UP && tui_state.selected_process > 0) {
                 tui_state.selected_process--;
                 if (tui_state.selected_process < tui_state.process_scroll) tui_state.process_scroll = tui_state.selected_process;
-            } else if (vk == VK_DOWN && (unsigned int)tui_state.selected_process + 1 < tui_state.process_count) {
+            } else if (vk == VK_DOWN && (unsigned int)tui_state.selected_process + 1 < tui_state.process_view_count) {
                 tui_state.selected_process++;
                 int vis_rows = (tui_state.height - 3) - CONTENT_START;
                 if (tui_state.selected_process >= tui_state.process_scroll + vis_rows) tui_state.process_scroll = tui_state.selected_process - vis_rows + 1;
@@ -773,6 +791,10 @@ static void handle_key(WORD vk, WCHAR ch)
             } else if (vk == VK_F5) {
                 tui_refresh_process_list();
                 tui_set_status(L"Process list refreshed", FALSE);
+            } else if (vk == VK_ESCAPE && tui_process_filter_active()) {
+                /* Esc on a filtered list clears the filter instead of bouncing
+                   back to the sidebar -- one keystroke to widen the view. */
+                tui_clear_process_filter();
             }
         }
         if (tui_state.panel == PANEL_SCANNER) {

@@ -17,6 +17,7 @@
 #define CMD_NEXT_PREFIX      5  /* length of L"next "       */
 #define CMD_TYPE_PREFIX      5  /* length of L"type "       */
 #define CMD_STRENC_PREFIX    7  /* length of L"strenc "     */
+#define CMD_SEARCH_PREFIX    7  /* length of L"search "     */
 #define CMD_ADDENTRY_PREFIX  9  /* length of L"addentry "   */
 #define CMD_DELENTRY_PREFIX  9  /* length of L"delentry "   */
 #define CMD_ENTRYLABEL_PREFIX 11 /* length of L"entrylabel " */
@@ -32,6 +33,7 @@ static void cmd_scan(const wchar_t *args);
 static void cmd_next(const wchar_t *args);
 static void cmd_type(const wchar_t *args);
 static void cmd_strenc(const wchar_t *args);
+static void cmd_search(const wchar_t *args);
 static void cmd_addentry(const wchar_t *args);
 static void cmd_delentry(const wchar_t *args);
 static void cmd_entrylabel(const wchar_t *args);
@@ -112,6 +114,20 @@ void tui_exec_command(void)
 
     if (wcsncmp(tui_state.cmd_buf, L"strenc ", CMD_STRENC_PREFIX) == 0) {
         cmd_strenc(tui_state.cmd_buf + CMD_STRENC_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    /* `search <name>` filters the Processes panel to entries whose image name
+       contains <name> as a case-insensitive substring. `search` alone clears
+       any active filter and shows the full list again. */
+    if (wcsncmp(tui_state.cmd_buf, L"search ", CMD_SEARCH_PREFIX) == 0) {
+        cmd_search(tui_state.cmd_buf + CMD_SEARCH_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+    if (wcscmp(tui_state.cmd_buf, L"search") == 0) {
+        cmd_search(L"");
         tui_state.cmd_len = 0;
         return;
     }
@@ -362,6 +378,32 @@ static void cmd_strenc(const wchar_t *args)
         tui_set_status(L"String encoding: UTF-16LE", FALSE);
     } else {
         tui_set_status(L"usage: strenc ascii|utf16", TRUE);
+    }
+}
+
+static void cmd_search(const wchar_t *args)
+{
+    /* Skip leading spaces so `search    chrome` works the same as
+       `search chrome`. Trailing spaces are left as-is -- a trailing space is
+       a legitimate part of a needle edge case, but trimming them too would
+       break searching for image names ending in whitespace (none in
+       practice), so we keep the simpler contract. */
+    while (*args == L' ') args++;
+
+    if (*args == L'\0') {
+        tui_clear_process_filter();
+        return;
+    }
+
+    tui_set_process_filter(args);
+
+    /* If the user ran `search` from another panel, jump to the Processes
+       panel so they see the filtered results instead of wondering where
+       they went. We leave the focus alone (the command bar handlers will
+       hand it back via Tab/Esc as usual). */
+    if (tui_state.panel != PANEL_PROCESSES) {
+        tui_state.panel = PANEL_PROCESSES;
+        tui_state.sidebar_idx = PANEL_PROCESSES;
     }
 }
 

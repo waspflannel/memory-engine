@@ -40,6 +40,7 @@ static const HelpEntry workflow_entries[] = {
 
 static const HelpEntry scanner_commands_entries[] = {
     { L"attach <pid>",      L"attach the scanner to a running target process by its numeric PID" },
+    { L"search <name>",    L"filter the Processes panel to image names containing <name> (case-insensitive); `search` alone clears the filter" },
     { L"detach",            L"detach from the current process and tear down the scanner session" },
     { L"read <addr> <n>",   L"read `n` bytes (1-512) from a hex address in the target; bytes are shown in the status bar as hex" },
     { L"write <addr> <hex>",L"write raw hex bytes (e.g. `write 0x1234ABCD 90 90`) to an address in the target process" },
