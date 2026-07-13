@@ -71,8 +71,8 @@ void tui_exec_command(void)
                 scanner_session_destroy(&tui_state.scanner);
                 tui_state.scanner_inited = FALSE;
             }
-            process_detach(&tui_state.target);
             addr_table_set_target(&tui_state.address_table, NULL);
+            process_detach(&tui_state.target);
             tui_state.attached = FALSE;
             tui_set_status(L"Detached", FALSE);
         } else {

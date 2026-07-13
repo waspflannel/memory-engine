@@ -3,46 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
+#include <errno.h>
 
 #define ADDR_TABLE_INIT_CAPACITY 64
-
-typedef int (*type_name_lookup)(const char *name, ScanType *out);
-
-static PlatformError scan_type_from_name(const char *name, ScanType *out)
-{
-    if (strcmp(name, "i32")    == 0) { *out = SCAN_TYPE_I32;    return PLATFORM_OK; }
-    if (strcmp(name, "i8")     == 0) { *out = SCAN_TYPE_I8;     return PLATFORM_OK; }
-    if (strcmp(name, "i16")    == 0) { *out = SCAN_TYPE_I16;    return PLATFORM_OK; }
-    if (strcmp(name, "i64")    == 0) { *out = SCAN_TYPE_I64;    return PLATFORM_OK; }
-    if (strcmp(name, "u8")     == 0) { *out = SCAN_TYPE_U8;     return PLATFORM_OK; }
-    if (strcmp(name, "u16")    == 0) { *out = SCAN_TYPE_U16;    return PLATFORM_OK; }
-    if (strcmp(name, "u32")    == 0) { *out = SCAN_TYPE_U32;    return PLATFORM_OK; }
-    if (strcmp(name, "u64")    == 0) { *out = SCAN_TYPE_U64;    return PLATFORM_OK; }
-    if (strcmp(name, "f32")    == 0) { *out = SCAN_TYPE_F32;    return PLATFORM_OK; }
-    if (strcmp(name, "f64")    == 0) { *out = SCAN_TYPE_F64;    return PLATFORM_OK; }
-    if (strcmp(name, "string") == 0) { *out = SCAN_TYPE_STRING; return PLATFORM_OK; }
-    if (strcmp(name, "aob")    == 0) { *out = SCAN_TYPE_AOB;    return PLATFORM_OK; }
-    return PLATFORM_ERR_INVALID_PARAM;
-}
-
-static const char *scan_type_to_name(ScanType type)
-{
-    switch (type) {
-    case SCAN_TYPE_I32:    return "i32";
-    case SCAN_TYPE_I8:     return "i8";
-    case SCAN_TYPE_I16:    return "i16";
-    case SCAN_TYPE_I64:    return "i64";
-    case SCAN_TYPE_U8:     return "u8";
-    case SCAN_TYPE_U16:    return "u16";
-    case SCAN_TYPE_U32:    return "u32";
-    case SCAN_TYPE_U64:    return "u64";
-    case SCAN_TYPE_F32:    return "f32";
-    case SCAN_TYPE_F64:    return "f64";
-    case SCAN_TYPE_STRING: return "string";
-    case SCAN_TYPE_AOB:    return "aob";
-    default:               return "?";
-    }
-}
 
 static int hex_nibble(char c)
 {
@@ -85,12 +48,19 @@ void addr_table_destroy(AddrTable *table)
 
 void addr_table_set_target(AddrTable *table, const Target *target)
 {
+    if (!table || table->target == target) return;
+    for (size_t i = 0; i < table->count; i++) {
+        table->entries[i].locked = false;
+        table->entries[i].value_valid = false;
+        memset(table->entries[i].current_value, 0, sizeof(table->entries[i].current_value));
+    }
     table->target = target;
 }
 
 int addr_table_add(AddrTable *table, const char *label, ScanType type, uintptr_t address)
 {
-    if (!table || !label || !label[0]) return -1;
+    if (!table || !label || !label[0] || !scanner_type_name(type) || address == 0) return -1;
+    if (strchr(label, '"') || strchr(label, '\r') || strchr(label, '\n') || strlen(label) >= ADDR_ENTRY_LABEL_MAX) return -1;
     if (!table->entries) return -1;
 
     if (table->count >= table->capacity) {
@@ -129,7 +99,8 @@ int addr_table_remove(AddrTable *table, size_t index)
 
 int addr_table_rename(AddrTable *table, size_t index, const char *label)
 {
-    if (!table || index >= table->count || !label || !label[0]) return -1;
+    if (!table || index >= table->count || !label || !label[0] || strchr(label, '"') ||
+        strchr(label, '\r') || strchr(label, '\n') || strlen(label) >= ADDR_ENTRY_LABEL_MAX) return -1;
 
     strncpy_s(table->entries[index].label, ADDR_ENTRY_LABEL_MAX, label, _TRUNCATE);
     return 0;
@@ -137,7 +108,7 @@ int addr_table_rename(AddrTable *table, size_t index, const char *label)
 
 int addr_table_lock(AddrTable *table, size_t index, const void *lock_value)
 {
-    if (!table || index >= table->count || !lock_value) return -1;
+    if (!table || !table->target || !table->target->handle || index >= table->count || !lock_value) return -1;
 
     AddrEntry *entry = &table->entries[index];
     unsigned short width = entry->value_width;
@@ -175,6 +146,7 @@ void addr_table_refresh(AddrTable *table)
 
 void addr_table_lock_write(AddrTable *table, bool *had_error, size_t *error_index)
 {
+    if (!had_error || !error_index) return;
     *had_error = false;
 
     if (!table || !table->target || !table->target->handle) return;
@@ -206,7 +178,7 @@ int addr_table_save(const AddrTable *table, const char *filepath)
         const AddrEntry *e = &table->entries[i];
 
         fprintf(f, "entry \"%s\" %s 0x%" PRIxPTR " %d",
-                e->label, scan_type_to_name(e->type), e->address, e->locked ? 1 : 0);
+                e->label, scanner_type_name(e->type), e->address, e->locked ? 1 : 0);
 
         if (e->locked && e->value_width > 0 && e->value_width <= ADDR_ENTRY_VALUE_MAX) {
             fputc(' ', f);
@@ -217,7 +189,8 @@ int addr_table_save(const AddrTable *table, const char *filepath)
         fputc('\n', f);
     }
 
-    fclose(f);
+    int write_failed = fflush(f) != 0 || ferror(f);
+    if (fclose(f) != 0 || write_failed) return 0;
     return 1;
 }
 
@@ -229,14 +202,12 @@ int addr_table_load(AddrTable *table, const char *filepath)
     if (fopen_s(&f, filepath, "r") != 0 || !f) return 0;
 
     char line_buf[2048];
-    int line_no = 0;
 
     /* Validate header */
     if (!fgets(line_buf, (int)sizeof(line_buf), f)) {
         fclose(f);
         return 0;
     }
-    line_no++;
     line_buf[strcspn(line_buf, "\r\n")] = '\0';
 
     if (strcmp(line_buf, "# MemForge Address Table v1") != 0) {
@@ -249,7 +220,7 @@ int addr_table_load(AddrTable *table, const char *filepath)
     addr_table_init(&temp, table->target);
 
     while (fgets(line_buf, (int)sizeof(line_buf), f)) {
-        line_no++;
+        if (!strchr(line_buf, '\n') && !feof(f)) { addr_table_destroy(&temp); fclose(f); return 0; }
         line_buf[strcspn(line_buf, "\r\n")] = '\0';
         if (line_buf[0] == '\0' || line_buf[0] == '#') continue;
 
@@ -296,7 +267,14 @@ int addr_table_load(AddrTable *table, const char *filepath)
             if (addr_len >= sizeof(addr_copy)) { addr_table_destroy(&temp); fclose(f); return 0; }
             memcpy(addr_copy, addr_start, addr_len);
             addr_copy[addr_len] = '\0';
-            address = (uintptr_t)strtoull(addr_copy, NULL, 16);
+            char *end = NULL;
+            errno = 0;
+            unsigned long long parsed = strtoull(addr_copy, &end, 16);
+            if (errno == ERANGE || !end || *end != '\0' || parsed == 0 ||
+                parsed > (unsigned long long)UINTPTR_MAX) {
+                addr_table_destroy(&temp); fclose(f); return 0;
+            }
+            address = (uintptr_t)parsed;
         }
 
         /* Parse locked flag */
@@ -309,7 +287,7 @@ int addr_table_load(AddrTable *table, const char *filepath)
         if (*p != ' ' && *p != '\0') { addr_table_destroy(&temp); fclose(f); return 0; }
 
         ScanType type;
-        if (scan_type_from_name(type_name, &type) != PLATFORM_OK) {
+        if (scanner_type_from_name(type_name, &type) != PLATFORM_OK) {
             addr_table_destroy(&temp);
             fclose(f);
             return 0;
@@ -349,11 +327,7 @@ int addr_table_load(AddrTable *table, const char *filepath)
                 fclose(f);
                 return 0;
             }
-            if (addr_table_lock(&temp, (size_t)idx, lock_bytes) != 0) {
-                addr_table_destroy(&temp);
-                fclose(f);
-                return 0;
-            }
+            /* Persisted locks are validated but intentionally loaded inert. */
         } else {
             while (*p == ' ') p++;
             if (*p != '\0') {
@@ -363,7 +337,7 @@ int addr_table_load(AddrTable *table, const char *filepath)
             }
         }
     }
-    fclose(f);
+    if (ferror(f) || fclose(f) != 0) { addr_table_destroy(&temp); return 0; }
 
     /* Commit: replace existing entries. */
     addr_table_destroy(table);
