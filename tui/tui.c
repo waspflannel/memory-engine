@@ -66,7 +66,8 @@ static void draw_help(Screen *screen);
 static int  draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *text, WORD attr, int max_rows);
 static void render(void);
 static void handle_key(WORD vk, WCHAR ch);
-static void read_input(void);
+static void read_input(DWORD timeout);
+static void tick_address_table(void);
 
 /* ---- Public API (order matches tui.h) ---- */
 
@@ -488,7 +489,7 @@ static void draw_address_table_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > CONTENT_START) {
         screen_text(screen, main_x, help_row,
-                    L"d del   l lock   u unlock   e label   addentry <addr> <type> <name>",
+                    L"d del   l lock   u unlock   e label   r read   w write   ? help",
                     s_attr_border);
     }
 }
@@ -856,27 +857,6 @@ static void handle_key(WORD vk, WCHAR ch)
                            tui_state.address_table_selected);
                 tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
                 tui_state.focus = FOCUS_COMMAND;
-            } else if (ch == L'r' && count > 0) {
-                /* Read the selected entry's address -- opens the command bar
-                   pre-filled with `read <addr> `; type the byte count (1-512)
-                   and Enter. Mirrors the `r` shortcut on the Scanner panel so
-                   the same muscle memory works on either page. */
-                unsigned long long addr = tui_state.address_table.entries[tui_state.address_table_selected].address;
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"read %llX ", addr);
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
-            } else if (ch == L'w' && count > 0) {
-                /* Write to the selected entry's address -- opens the command
-                   bar pre-filled with `write <addr> `; type hex byte pairs and
-                   Enter. Same contract as the Scanner `w` shortcut. */
-                unsigned long long addr = tui_state.address_table.entries[tui_state.address_table_selected].address;
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"write %llX ", addr);
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
             } else if (ch == L'?') {
                 const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
                 if (book) {
@@ -912,16 +892,45 @@ static void handle_key(WORD vk, WCHAR ch)
     }
 }
 
-static void read_input(void)
+static void read_input(DWORD timeout)
 {
     INPUT_RECORD records[INPUT_RECORD_BATCH];
     DWORD count = 0;
-    if (!ReadConsoleInputW(tui_state.hIn, records, INPUT_RECORD_BATCH, &count)) return;
+    DWORD wait = WaitForSingleObject(tui_state.hIn, timeout);
+    if (wait == WAIT_TIMEOUT) return;
+    if (wait != WAIT_OBJECT_0 || !ReadConsoleInputW(tui_state.hIn, records, INPUT_RECORD_BATCH, &count)) {
+        tui_set_status(L"Console input failed", TRUE);
+        tui_state.running = FALSE;
+        return;
+    }
 
     for (DWORD i = 0; i < count; i++) {
         if (records[i].EventType != KEY_EVENT) continue;
         if (!records[i].Event.KeyEvent.bKeyDown) continue;
         handle_key(records[i].Event.KeyEvent.wVirtualKeyCode,
                    records[i].Event.KeyEvent.uChar.UnicodeChar);
+    }
+}
+
+static void tick_address_table(void)
+{
+    if (!tui_state.attached) return;
+    ULONGLONG now = GetTickCount64();
+    if (now - tui_state.address_table_last_refresh >= ADDR_TABLE_REFRESH_INTERVAL_MS) {
+        addr_table_refresh(&tui_state.address_table);
+        tui_state.address_table_last_refresh = now;
+    }
+    if (now - tui_state.address_table_last_lock >= ADDR_TABLE_LOCK_INTERVAL_MS) {
+        bool had_error = false;
+        size_t error_index = 0;
+        addr_table_lock_write(&tui_state.address_table, &had_error, &error_index);
+        tui_state.address_table_last_lock = now;
+        if (had_error && error_index < tui_state.address_table.count) {
+            wchar_t msg[256];
+            const AddrEntry *entry = &tui_state.address_table.entries[error_index];
+            swprintf_s(msg, _countof(msg), L"Lock write failed on \"%S\" (0x%llX) -- entry unlocked",
+                       entry->label, (unsigned long long)entry->address);
+            tui_set_status(msg, TRUE);
+        }
     }
 }
