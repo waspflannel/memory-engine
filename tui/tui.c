@@ -753,7 +753,15 @@ static void handle_key(WORD vk, WCHAR ch)
 
     case FOCUS_MAIN:
         if (tui_state.panel == PANEL_PROCESSES) {
-            if (vk == VK_UP && tui_state.selected_process > 0) {
+            if (ch == L'?') {
+                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+                if (book) {
+                    tui_state.help_book = book;
+                    tui_state.help_open = 1;
+                    tui_state.help_tab = 0;
+                    tui_state.help_scroll = 0;
+                }
+            } else if (vk == VK_UP && tui_state.selected_process > 0) {
                 tui_state.selected_process--;
                 if (tui_state.selected_process < tui_state.process_scroll) tui_state.process_scroll = tui_state.selected_process;
             } else if (vk == VK_DOWN && (unsigned int)tui_state.selected_process + 1 < tui_state.process_count) {
@@ -793,6 +801,22 @@ static void handle_key(WORD vk, WCHAR ch)
                 tui_state.cmd_len = 0;
                 swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"addentry %llX %s ",
                            addr, tui_scan_type_name(tui_state.scanner.param.type));
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'r' && tui_state.scanner.has_results &&
+                       (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
+                unsigned long long addr = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"read %llX ", addr);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'w' && tui_state.scanner.has_results &&
+                       (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
+                unsigned long long addr = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"write %llX ", addr);
                 tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
                 tui_state.focus = FOCUS_COMMAND;
             }
