@@ -1,11 +1,16 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <wchar.h>
 #include "tui/render.h"
 
 int screen_alloc(Screen *screen, int width, int height)
 {
+    if (!screen || width <= 0 || height <= 0 || width > SHRT_MAX || height > SHRT_MAX ||
+        (size_t)width > SIZE_MAX / (size_t)height ||
+        (size_t)width * (size_t)height > SIZE_MAX / sizeof(CHAR_INFO)) return -1;
     screen->cells = (CHAR_INFO *)calloc((size_t)width * (size_t)height, sizeof(CHAR_INFO));
     if (!screen->cells) {
         return -1;
@@ -64,10 +69,11 @@ void screen_text_right(Screen *screen, int right_x, int y, const wchar_t *text, 
     screen_text(screen, x, y, text, attr);
 }
 
-void screen_present(Screen *screen, HANDLE out)
+int screen_present(Screen *screen, HANDLE out)
 {
+    if (!screen || !screen->cells || !out || out == INVALID_HANDLE_VALUE) return -1;
     SMALL_RECT region = { 0, 0, (SHORT)(screen->width - 1), (SHORT)(screen->height - 1) };
     COORD size   = { (SHORT)screen->width, (SHORT)screen->height };
     COORD origin = { 0, 0 };
-    WriteConsoleOutputW(out, screen->cells, size, origin, &region);
+    return WriteConsoleOutputW(out, screen->cells, size, origin, &region) ? 0 : -1;
 }

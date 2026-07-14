@@ -37,20 +37,35 @@ PlatformError platform_list_processes(PlatformProcessEntry **entries, unsigned i
     PROCESSENTRY32W pe = {0};
     pe.dwSize = sizeof(pe);
 
-    if (Process32FirstW(snap, &pe)) {
-        do {
-            if (n >= capacity) {
-                PlatformError err = grow_process_list(&list, &capacity, n);
-                if (err != PLATFORM_OK) {
-                    CloseHandle(snap);
-                    return err;
-                }
+    if (!Process32FirstW(snap, &pe)) {
+        DWORD first_error = GetLastError();
+        HeapFree(GetProcessHeap(), 0, list);
+        CloseHandle(snap);
+        return first_error == ERROR_NO_MORE_FILES ? PLATFORM_OK : PLATFORM_ERR_ENUM_FAILED;
+    }
+
+    for (;;) {
+        if (n >= capacity) {
+            PlatformError err = grow_process_list(&list, &capacity, n);
+            if (err != PLATFORM_OK) {
+                CloseHandle(snap);
+                return err;
             }
 
-            list[n].pid = pe.th32ProcessID;
-            wcsncpy_s(list[n].name, PLATFORM_NAME_MAX, pe.szExeFile, _TRUNCATE);
-            n++;
-        } while (Process32NextW(snap, &pe));
+        }
+
+        list[n].pid = pe.th32ProcessID;
+        wcsncpy_s(list[n].name, PLATFORM_NAME_MAX, pe.szExeFile, _TRUNCATE);
+        n++;
+
+        if (Process32NextW(snap, &pe)) continue;
+        DWORD next_error = GetLastError();
+        if (next_error != ERROR_NO_MORE_FILES) {
+            HeapFree(GetProcessHeap(), 0, list);
+            CloseHandle(snap);
+            return PLATFORM_ERR_ENUM_FAILED;
+        }
+        break;
     }
 
     CloseHandle(snap);
@@ -86,7 +101,7 @@ PlatformError platform_open_process(unsigned int pid, void **out_handle)
 
     HANDLE handle = OpenProcess(
         PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION |
-        PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
         FALSE, (DWORD)pid);
 
     if (!handle) {
@@ -105,6 +120,21 @@ void platform_close_handle(void *handle)
     if (handle) {
         CloseHandle((HANDLE)handle);
     }
+}
+
+PlatformError platform_process_is_alive(void *handle, int *alive)
+{
+    if (!handle || !alive) return PLATFORM_ERR_INVALID_PARAM;
+    DWORD wait_result = WaitForSingleObject((HANDLE)handle, 0);
+    if (wait_result == WAIT_TIMEOUT) {
+        *alive = 1;
+        return PLATFORM_OK;
+    }
+    if (wait_result == WAIT_OBJECT_0) {
+        *alive = 0;
+        return PLATFORM_OK;
+    }
+    return PLATFORM_ERR_NOT_FOUND;
 }
 
 PlatformError platform_read_memory(void *handle, unsigned long long address, void *buffer, size_t size, size_t *bytes_read)
@@ -161,15 +191,16 @@ PlatformError platform_query_region(void *handle, unsigned long long address, Pl
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
+    SYSTEM_INFO system_info = {0};
+    GetSystemInfo(&system_info);
+    if (address > (unsigned long long)(UINT_PTR)system_info.lpMaximumApplicationAddress) {
+        return PLATFORM_ERR_END_OF_ADDRESS_SPACE;
+    }
+
     MEMORY_BASIC_INFORMATION mbi = {0};
     SIZE_T ret = VirtualQueryEx((HANDLE)handle, (LPCVOID)(UINT_PTR)address, &mbi, sizeof(mbi));
 
-    if (ret == 0) {
-        if (GetLastError() == ERROR_INVALID_PARAMETER) {
-            return PLATFORM_ERR_END_OF_ADDRESS_SPACE;
-        }
-        return PLATFORM_ERR_QUERY_FAILED;
-    }
+    if (ret == 0) return PLATFORM_ERR_QUERY_FAILED;
 
     info->base    = (unsigned long long)(UINT_PTR)mbi.BaseAddress;
     info->size    = (size_t)mbi.RegionSize;

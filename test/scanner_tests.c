@@ -3,6 +3,7 @@
 #define _UNICODE
 #include <windows.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "core/process/process.h"
@@ -48,6 +49,22 @@ static int parse_addr(const char *buf, const char *name, unsigned long long *out
     const char *at = strchr(p, '@');
     if (!at) return 0;
     return sscanf_s(at + 1, " %llx", out) == 1;
+}
+
+static void check_fixed_type(Target *target, ScanType type, const void *value,
+                             size_t width, const char *message)
+{
+    ScanSession session;
+    scanner_session_init(&session, target, type);
+    ScanResults results;
+    results_init(&results);
+    ScanRegion region = { (unsigned long long)(UINT_PTR)value, width };
+    int ok = scanner_value_set(&session.param, type, value, width) == PLATFORM_OK &&
+             scanner_find_hits(&session, &region, 1, &results) == PLATFORM_OK &&
+             results.count == 1 && results.addresses[0] == region.base;
+    check(ok, message);
+    results_free(&results);
+    scanner_session_destroy(&session);
 }
 
 int main(void)
@@ -171,6 +188,15 @@ int main(void)
         scanner_value_set(&s.param, SCAN_TYPE_I32, &v100, sizeof(v100));
         check(scanner_first_scan(&s) == PLATFORM_OK, "first scan for 100");
 
+        size_t prior_count = s.results.count;
+        unsigned long long *prior_addresses = s.results.addresses;
+        float wrong_type = 100.0f;
+        scanner_value_set(&s.param, SCAN_TYPE_F32, &wrong_type, sizeof(wrong_type));
+        check(scanner_next_scan(&s) == PLATFORM_ERR_INVALID_PARAM,
+              "next scan rejects a same-width type change");
+        check(s.results.count == prior_count && s.results.addresses == prior_addresses,
+              "rejected type change preserves prior results atomically");
+
         int v50 = 50;
         check(memory_write(&target, health_addr, &v50, sizeof(v50)) == PLATFORM_OK, "write 50 to health_addr");
         scanner_value_set(&s.param, SCAN_TYPE_I32, &v50, sizeof(v50));
@@ -259,10 +285,74 @@ int main(void)
         scanner_session_destroy(&s);
     }
 
+    printf("--- T8: every fixed-width type and chunk overlap ---\n");
+    {
+        Target self = {0};
+        self.handle = GetCurrentProcess();
+        int8_t i8 = -12;
+        int16_t i16 = -1234;
+        uint8_t u8 = 250;
+        uint16_t u16 = 65000;
+        uint64_t u64 = UINT64_C(0xFEDCBA9876543210);
+        double f64 = 123.25;
+        check_fixed_type(&self, SCAN_TYPE_I8, &i8, sizeof(i8), "i8 controlled scan");
+        check_fixed_type(&self, SCAN_TYPE_I16, &i16, sizeof(i16), "i16 controlled scan");
+        check_fixed_type(&self, SCAN_TYPE_U8, &u8, sizeof(u8), "u8 controlled scan");
+        check_fixed_type(&self, SCAN_TYPE_U16, &u16, sizeof(u16), "u16 controlled scan");
+        check_fixed_type(&self, SCAN_TYPE_U64, &u64, sizeof(u64), "u64 controlled scan");
+        check_fixed_type(&self, SCAN_TYPE_F64, &f64, sizeof(f64), "f64 controlled scan");
+
+        unsigned char *memory = (unsigned char *)VirtualAlloc(NULL, 65544,
+            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        check(memory != NULL, "allocate controlled chunk-boundary region");
+        if (memory) {
+            memset(memory, 0, 65544);
+            const unsigned char pattern[] = { 0xDE, 0xAD, 0xBE, 0xEF };
+            memcpy(memory + 65534, pattern, sizeof(pattern));
+            ScanSession session;
+            scanner_session_init(&session, &self, SCAN_TYPE_AOB);
+            scanner_value_set(&session.param, SCAN_TYPE_AOB, pattern, sizeof(pattern));
+            ScanRegion region = { (unsigned long long)(UINT_PTR)memory, 65544 };
+            ScanResults results;
+            results_init(&results);
+            check(scanner_find_hits(&session, &region, 1, &results) == PLATFORM_OK,
+                  "chunk-boundary controlled scan succeeds");
+            check(find_addr(&results, region.base + 65534),
+                  "match spanning 64 KiB chunk boundary is found");
+            results_free(&results);
+            scanner_session_destroy(&session);
+            VirtualFree(memory, 0, MEM_RELEASE);
+        }
+    }
+
+    printf("--- T9: target exit is loud and scan state stays atomic ---\n");
+    {
+        ScanSession session;
+        scanner_session_init(&session, &target, SCAN_TYPE_I32);
+        int value = 25;
+        scanner_value_set(&session.param, SCAN_TYPE_I32, &value, sizeof(value));
+        check(scanner_first_scan(&session) == PLATFORM_OK, "pre-exit first scan succeeds");
+        size_t prior_count = session.results.count;
+        unsigned long long *prior_addresses = session.results.addresses;
+
+        check(TerminateProcess(pi.hProcess, 0) != 0, "terminate target for failure injection");
+        WaitForSingleObject(pi.hProcess, 2000);
+        int alive = 1;
+        check(process_is_alive(&target, &alive) == PLATFORM_OK && !alive,
+              "terminated target is reported dead");
+        check(scanner_next_scan(&session) != PLATFORM_OK,
+              "next scan reports target read failure");
+        check(session.results.count == prior_count && session.results.addresses == prior_addresses,
+              "failed next scan preserves prior result set");
+        check(scanner_first_scan(&session) != PLATFORM_OK,
+              "first scan reports target query failure");
+        check(!session.has_results && session.results.count == 0 && !session.results.addresses,
+              "failed first scan leaves no partial result set");
+        scanner_session_destroy(&session);
+    }
+
     process_detach(&target);
 
-    TerminateProcess(pi.hProcess, 0);
-    WaitForSingleObject(pi.hProcess, 2000);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     CloseHandle(out_r);

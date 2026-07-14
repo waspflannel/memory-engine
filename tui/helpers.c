@@ -2,6 +2,7 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <wchar.h>
@@ -13,6 +14,7 @@ static int parse_aob_value(const wchar_t *args, ScanValue *out);
 static int parse_string_value(const wchar_t *args, ScanValue *out);
 static int is_hex_wchar(wchar_t c);
 static int hex_wchar_value(wchar_t c);
+static int tail_is_empty(const wchar_t *text);
 static int wcsstr_icase(const wchar_t *hay, const wchar_t *needle);
 static void tui_rebuild_process_view(void);
 
@@ -25,24 +27,25 @@ void tui_set_status(const wchar_t *msg, int is_error)
     tui_state.status_ticks = GetTickCount64();
 }
 
-void tui_refresh_process_list(void)
+int tui_refresh_process_list(void)
 {
-    if (tui_state.processes) {
-        process_free_list(tui_state.processes);
-        tui_state.processes = NULL;
+    ProcessEntry *processes = NULL;
+    unsigned int process_count = 0;
+    PlatformError err = process_list(&processes, &process_count);
+    if (err != PLATFORM_OK) {
+        wchar_t message[256];
+        swprintf_s(message, _countof(message), L"Failed to list processes: %S", process_error_string(err));
+        tui_set_status(message, TRUE);
+        return 0;
     }
-    tui_state.process_count = 0;
+
+    process_free_list(tui_state.processes);
+    tui_state.processes = processes;
+    tui_state.process_count = process_count;
     tui_state.selected_process = 0;
     tui_state.process_scroll = 0;
-
-    PlatformError err = process_list(&tui_state.processes, &tui_state.process_count);
-    if (err != PLATFORM_OK) {
-        tui_set_status(L"Failed to list processes", TRUE);
-    }
-
-    /* Preserve any active filter (e.g. an F5 refresh after launching the
-       target): rebuild the view against the freshly fetched process list. */
     tui_rebuild_process_view();
+    return 1;
 }
 
 void tui_set_process_filter(const wchar_t *needle)
@@ -82,17 +85,31 @@ int tui_process_filter_active(void)
     return tui_state.process_filter[0] != L'\0';
 }
 
+DWORD tui_next_wait_timeout(ULONGLONG now)
+{
+    if (!tui_state.attached) return INFINITE;
+    ULONGLONG refresh_due = tui_state.address_table_last_refresh + ADDR_TABLE_REFRESH_INTERVAL_MS;
+    ULONGLONG lock_due = tui_state.address_table_last_lock + ADDR_TABLE_LOCK_INTERVAL_MS;
+    ULONGLONG due = refresh_due < lock_due ? refresh_due : lock_due;
+    return now >= due ? 0 : (DWORD)(due - now);
+}
+
+void tui_detach_target(void)
+{
+    if (tui_state.scanner_inited) {
+        scanner_session_destroy(&tui_state.scanner);
+        tui_state.scanner_inited = FALSE;
+    }
+    addr_table_set_target(&tui_state.address_table, NULL);
+    process_detach(&tui_state.target);
+    tui_state.attached = FALSE;
+    tui_state.address_table_last_refresh = 0;
+    tui_state.address_table_last_lock = 0;
+}
+
 int tui_do_attach(DWORD pid)
 {
-    if (tui_state.attached) {
-        if (tui_state.scanner_inited) {
-            scanner_session_destroy(&tui_state.scanner);
-            tui_state.scanner_inited = FALSE;
-        }
-        addr_table_set_target(&tui_state.address_table, NULL);
-        process_detach(&tui_state.target);
-        tui_state.attached = FALSE;
-    }
+    if (tui_state.attached) tui_detach_target();
 
     process_enable_privilege();
 
@@ -139,44 +156,72 @@ const wchar_t *tui_scan_type_name(ScanType type)
 
 int tui_parse_scan_value(const wchar_t *args, ScanValue *out)
 {
+    if (!args || !out) return 0;
+    wchar_t *end = NULL;
+    const wchar_t *trimmed = args;
+    while (*trimmed == L' ' || *trimmed == L'\t') trimmed++;
+    errno = 0;
+
     switch (out->type) {
-    case SCAN_TYPE_I8:
-    case SCAN_TYPE_I16:
+    case SCAN_TYPE_I8: {
+        long long parsed = wcstoll(args, &end, 10);
+        if (errno == ERANGE || end == args || !tail_is_empty(end) || parsed < INT8_MIN || parsed > INT8_MAX) return 0;
+        int8_t value = (int8_t)parsed;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
+    }
+    case SCAN_TYPE_I16: {
+        long long parsed = wcstoll(args, &end, 10);
+        if (errno == ERANGE || end == args || !tail_is_empty(end) || parsed < INT16_MIN || parsed > INT16_MAX) return 0;
+        int16_t value = (int16_t)parsed;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
+    }
     case SCAN_TYPE_I32: {
-        int x = 0;
-        if (swscanf_s(args, L"%d", &x) != 1) return 0;
-        if (out->type == SCAN_TYPE_I8  && (x < INT8_MIN  || x > INT8_MAX))  return 0;
-        if (out->type == SCAN_TYPE_I16 && (x < INT16_MIN || x > INT16_MAX)) return 0;
-        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
+        long long parsed = wcstoll(args, &end, 10);
+        if (errno == ERANGE || end == args || !tail_is_empty(end) || parsed < INT32_MIN || parsed > INT32_MAX) return 0;
+        int32_t value = (int32_t)parsed;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
     }
     case SCAN_TYPE_I64: {
-        long long x = 0;
-        if (swscanf_s(args, L"%lld", &x) != 1) return 0;
-        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
+        long long value = wcstoll(args, &end, 10);
+        if (errno == ERANGE || end == args || !tail_is_empty(end)) return 0;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
     }
-    case SCAN_TYPE_U8:
-    case SCAN_TYPE_U16:
+    case SCAN_TYPE_U8: {
+        if (*trimmed == L'-') return 0;
+        unsigned long long parsed = wcstoull(args, &end, 10);
+        if (errno == ERANGE || end == args || !tail_is_empty(end) || parsed > UINT8_MAX) return 0;
+        uint8_t value = (uint8_t)parsed;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
+    }
+    case SCAN_TYPE_U16: {
+        if (*trimmed == L'-') return 0;
+        unsigned long long parsed = wcstoull(args, &end, 10);
+        if (errno == ERANGE || end == args || !tail_is_empty(end) || parsed > UINT16_MAX) return 0;
+        uint16_t value = (uint16_t)parsed;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
+    }
     case SCAN_TYPE_U32: {
-        unsigned int x = 0;
-        if (*args == L'-' || swscanf_s(args, L"%u", &x) != 1) return 0;
-        if (out->type == SCAN_TYPE_U8  && x > UINT8_MAX)  return 0;
-        if (out->type == SCAN_TYPE_U16 && x > UINT16_MAX) return 0;
-        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
+        if (*trimmed == L'-') return 0;
+        unsigned long long parsed = wcstoull(args, &end, 10);
+        if (errno == ERANGE || end == args || !tail_is_empty(end) || parsed > UINT32_MAX) return 0;
+        uint32_t value = (uint32_t)parsed;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
     }
     case SCAN_TYPE_U64: {
-        unsigned long long x = 0;
-        if (*args == L'-' || swscanf_s(args, L"%llu", &x) != 1) return 0;
-        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
+        if (*trimmed == L'-') return 0;
+        unsigned long long value = wcstoull(args, &end, 10);
+        if (errno == ERANGE || end == args || !tail_is_empty(end)) return 0;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
     }
     case SCAN_TYPE_F32: {
-        float x = 0.0f;
-        if (swscanf_s(args, L"%f", &x) != 1) return 0;
-        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
+        float value = wcstof(args, &end);
+        if (errno == ERANGE || end == args || !tail_is_empty(end)) return 0;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
     }
     case SCAN_TYPE_F64: {
-        double x = 0.0;
-        if (swscanf_s(args, L"%lf", &x) != 1) return 0;
-        return scanner_value_set(out, out->type, &x, sizeof(x)) == PLATFORM_OK;
+        double value = wcstod(args, &end);
+        if (errno == ERANGE || end == args || !tail_is_empty(end)) return 0;
+        return scanner_value_set(out, out->type, &value, sizeof(value)) == PLATFORM_OK;
     }
     case SCAN_TYPE_STRING: return parse_string_value(args, out);
     case SCAN_TYPE_AOB:    return parse_aob_value(args, out);
@@ -196,6 +241,12 @@ static int hex_wchar_value(wchar_t c)
     if (c >= L'0' && c <= L'9') return (int)(c - L'0');
     if (c >= L'A' && c <= L'F') return (int)(c - L'A') + 10;
     return (int)(c - L'a') + 10;
+}
+
+static int tail_is_empty(const wchar_t *text)
+{
+    while (*text == L' ' || *text == L'\t') text++;
+    return *text == L'\0';
 }
 
 static int parse_aob_value(const wchar_t *args, ScanValue *out)
@@ -224,6 +275,7 @@ static int parse_aob_value(const wchar_t *args, ScanValue *out)
         } else {
             return 0;   /* malformed token */
         }
+        if (*p && *p != L' ' && *p != L'\t') return 0;
     }
 
     if (n == 0) return 0;

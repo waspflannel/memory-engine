@@ -29,7 +29,17 @@ typedef struct {
     size_t        capacity;
 } AddrTable;
 
-void addr_table_init(AddrTable *table, const Target *target);
+typedef enum {
+    ADDR_TABLE_IO_OK = 0,
+    ADDR_TABLE_IO_INVALID_PARAM,
+    ADDR_TABLE_IO_OPEN_FAILED,
+    ADDR_TABLE_IO_MALFORMED,
+    ADDR_TABLE_IO_READ_FAILED,
+    ADDR_TABLE_IO_WRITE_FAILED,
+    ADDR_TABLE_IO_OUT_OF_MEMORY,
+} AddrTableIoError;
+
+int  addr_table_init(AddrTable *table, const Target *target);
 void addr_table_destroy(AddrTable *table);
 void addr_table_set_target(AddrTable *table, const Target *target);
 
@@ -43,7 +53,7 @@ int  addr_table_unlock(AddrTable *table, size_t index);
  * addr_table_refresh: read current value for every entry.  Entries whose
  * read fails get value_valid = false.  Call this at ADDR_TABLE_REFRESH_INTERVAL_MS.
  */
-void addr_table_refresh(AddrTable *table);
+PlatformError addr_table_refresh(AddrTable *table);
 
 /*
  * addr_table_lock_write: for each locked entry, write its lock_value back.
@@ -58,7 +68,8 @@ void addr_table_lock_write(AddrTable *table, bool *had_error, size_t *error_inde
  * addr_table_load validates the file at the boundary; malformed lines are a
  * loud failure (return 0) that leaves the table unmodified.
  */
-int addr_table_save(const AddrTable *table, const char *filepath);
-int addr_table_load(AddrTable *table, const char *filepath);
+AddrTableIoError addr_table_save(const AddrTable *table, const wchar_t *filepath);
+AddrTableIoError addr_table_load(AddrTable *table, const wchar_t *filepath);
+const char      *addr_table_io_error_string(AddrTableIoError error);
 
 #endif

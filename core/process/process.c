@@ -45,11 +45,16 @@ void process_free_list(ProcessEntry *entries)
     free(entries);
 }
 
+void process_target_init(Target *target)
+{
+    if (target) memset(target, 0, sizeof(*target));
+}
+
 PlatformError process_attach(unsigned int pid, Target *target)
 {
     if (!target) return PLATFORM_ERR_INVALID_PARAM;
-
-    process_detach(target);
+    if (target->handle) return PLATFORM_ERR_INVALID_PARAM;
+    process_target_init(target);
 
     void *handle = NULL;
     PlatformError err = platform_open_process(pid, &handle);
@@ -82,6 +87,12 @@ void process_detach(Target *target)
     memset(target, 0, sizeof(*target));
 }
 
+PlatformError process_is_alive(const Target *target, int *alive)
+{
+    if (!target || !target->handle || !alive) return PLATFORM_ERR_INVALID_PARAM;
+    return platform_process_is_alive(target->handle, alive);
+}
+
 PlatformError process_enable_privilege(void)
 {
     return platform_enable_debug_privilege();
@@ -96,6 +107,7 @@ const char *process_error_string(PlatformError err)
     case PLATFORM_ERR_MODULE_FAILED:   return "failed to query module info";
     case PLATFORM_ERR_INVALID_PARAM:   return "invalid parameter";
     case PLATFORM_ERR_SNAPSHOT_FAILED: return "failed to list processes";
+    case PLATFORM_ERR_ENUM_FAILED:     return "process enumeration failed";
     case PLATFORM_ERR_PARTIAL_READ:    return "partial read from target memory";
     case PLATFORM_ERR_READ_FAILED:     return "failed to read target memory";
     case PLATFORM_ERR_PARTIAL_WRITE:   return "partial write to target memory";

@@ -33,35 +33,14 @@ static const HelpEntry workflow_entries[] = {
     { L"type <name>",   L"set the value type you are searching for -- clears any current scan results" },
     { L"scan <value>",  L"first scan: walk every byte of committed readable memory and keep addresses matching the value" },
     { L"next <value>",  L"re-reads surviving addresses, keeping only those that now match the new value" },
-    { L"strenc a|u",    L"set string encoding to ascii or utf16 for the string scan type" },
+    { L"strenc ascii|utf16", L"set string encoding for the string scan type" },
     { L"help / ?",      L"open this book (press ? on the Scanner panel, or type `help` in the command bar)" },
     { L"next steps",    L"when you've narrowed down to your targeted memory address, view the Commands tab to see what you can do" },
 };
 
-static const HelpEntry scanner_commands_entries[] = {
-    { L"attach <pid>",      L"attach the scanner to a running target process by its numeric PID" },
-    { L"search <name>",    L"filter the Processes panel to image names containing <name> (case-insensitive); `search` alone clears the filter" },
-    { L"detach",            L"detach from the current process and tear down the scanner session" },
-    { L"read <addr> <n>",   L"read `n` bytes (1-512) from a hex address in the target; bytes are shown in the status bar as hex" },
-    { L"write <addr> <hex>",L"write raw hex bytes (e.g. `write 0x1234ABCD 90 90`) to an address in the target process" },
-    { L"scan <value>",      L"first scan: walk every readable byte and keep addresses matching the value for the current type" },
-    { L"next <value>",      L"next scan: re-read surviving addresses, keeping those that now match the new value" },
-    { L"type <name>",       L"set the value type -- i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|aob (clears current results)" },
-    { L"strenc a|u",        L"set string encoding to `ascii` or `utf16` for string scans" },
-    { L"addentry",          L"`addentry <hex_addr> <type> <label>` -- add a memory address to the address table for live tracking" },
-    { L"delentry",          L"`delentry <index>` -- remove an entry from the address table by its 0-based index" },
-    { L"entrylabel",        L"`entrylabel <index> <new_label>` -- rename an existing address table entry" },
-    { L"lockentry",         L"`lockentry <index> <value>` -- write a fixed value to an entry every 50 ms (infinite health/ammo)" },
-    { L"unlockentry",       L"`unlockentry <index>` -- stop the lock loop on an entry so its value moves freely again" },
-    { L"saveentry",         L"`saveentry <filename>` -- persist the current address table to a human-readable text file" },
-    { L"loadentry",         L"`loadentry <filename>` -- restore a previously saved address table from file" },
-    { L"help / ?",          L"open this help book for the focused panel" },
-    { L"quit / exit",       L"close the memory engine" },
-};
-
 static const HelpEntry scanner_keys_entries[] = {
     { L"Up / Down", L"Move selection cursor through scan results" },
-    { L"r",        L"Read the selected address -- opens the command bar pre-filled with `read <addr> ` (type the byte count, 1-512, then Enter)" },
+    { L"r",        L"Read the selected address -- opens the command bar pre-filled with `read <addr> ` (type the byte count, 1-128, then Enter)" },
     { L"w",        L"Write to the selected address -- opens the command bar pre-filled with `write <addr> ` (type hex byte pairs, then Enter)" },
     { L"a",        L"Promote the selected hit to the address table -- opens the command bar pre-filled with `addentry <addr> <type> ` (type a label, then Enter)" },
     { L"?",        L"Open this help book" },
@@ -79,7 +58,7 @@ static const HelpPage scanner_pages[] = {
     { L"Workflow",      L"The find-then-narrow loop, and every scanner command you can type.",
       workflow_entries,   HELP_COUNT(workflow_entries) },
     { L"Commands",      L"Every command you can type in the command bar -- attach/scan/narrow, then read/write/lock once you've found your target.",
-      scanner_commands_entries, HELP_COUNT(scanner_commands_entries) },
+      tui_command_help_entries, TUI_COMMAND_HELP_COUNT },
     { L"Keys",          L"Keyboard shortcuts active when the Scanner panel is focused and a hit is selected.",
       scanner_keys_entries,     HELP_COUNT(scanner_keys_entries) },
 };

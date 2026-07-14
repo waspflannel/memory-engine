@@ -24,6 +24,6 @@ void screen_fill_row(Screen *screen, int y, wchar_t ch, WORD attr, int x0, int x
 void screen_text(Screen *screen, int x, int y, const wchar_t *text, WORD attr);
 void screen_text_right(Screen *screen, int right_x, int y, const wchar_t *text, WORD attr);
 
-void screen_present(Screen *screen, HANDLE out);   /* blit the buffer to the console */
+int  screen_present(Screen *screen, HANDLE out);   /* 0 on success, -1 on console failure */
 
 #endif

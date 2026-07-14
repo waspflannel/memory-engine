@@ -104,6 +104,12 @@ static void test_scanner_boundary(void)
     check(scanner_next_scan(&session) != PLATFORM_OK, "scanner_next_scan without prior first scan fails");
     scanner_session_destroy(&session);
 
+    ScanValue value = {0};
+    unsigned char short_value[1] = {0};
+    check(scanner_value_set(&value, SCAN_TYPE_I32, short_value, sizeof(short_value)) == PLATFORM_ERR_INVALID_PARAM &&
+          value.width == 0,
+          "fixed-width scanner value rejects a short buffer");
+
     results_init(NULL);  /* must not crash on NULL */
     results_free(NULL);  /* must not crash on NULL */
     check(1, "results NULL guards do not crash");

@@ -51,6 +51,7 @@ typedef struct {
     const Target *target;   /* borrowed, not owned */
     ScanValue     param;        /* value to search for */
     ScanResults   results;
+    ScanType      results_type;       /* valid only while has_results is set */
     int           has_results;        /* set after first scan; next scan requires it */
 } ScanSession;
 

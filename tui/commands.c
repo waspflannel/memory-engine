@@ -2,6 +2,8 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <wchar.h>
 
@@ -41,6 +43,13 @@ static void cmd_lockentry(const wchar_t *args);
 static void cmd_unlockentry(const wchar_t *args);
 static void cmd_saveentry(const wchar_t *args);
 static void cmd_loadentry(const wchar_t *args);
+static const wchar_t *skip_spaces(const wchar_t *text);
+static int parse_unsigned(const wchar_t *text, int base, unsigned long long maximum,
+                          unsigned long long *value, const wchar_t **tail);
+static int parse_index(const wchar_t *text, size_t count, size_t *index, const wchar_t **tail);
+static int tail_is_empty(const wchar_t *text);
+static int narrow_ascii(const wchar_t *text, char *output, size_t capacity);
+static int hex_digit_value(wchar_t c);
 
 /* ---- Public API (order matches tui_internal.h) ---- */
 
@@ -55,11 +64,13 @@ void tui_exec_command(void)
     }
 
     if (wcsncmp(tui_state.cmd_buf, L"attach ", CMD_ATTACH_PREFIX) == 0) {
-        DWORD pid = (DWORD)_wtol(tui_state.cmd_buf + CMD_ATTACH_PREFIX);
-        if (pid == 0) {
+        unsigned long long parsed_pid = 0;
+        const wchar_t *tail = NULL;
+        if (!parse_unsigned(tui_state.cmd_buf + CMD_ATTACH_PREFIX, 10, UINT32_MAX,
+                            &parsed_pid, &tail) || parsed_pid == 0 || !tail_is_empty(tail)) {
             tui_set_status(L"Invalid PID", TRUE);
         } else {
-            tui_do_attach(pid);
+            tui_do_attach((DWORD)parsed_pid);
         }
         tui_state.cmd_len = 0;
         return;
@@ -67,13 +78,7 @@ void tui_exec_command(void)
 
     if (wcscmp(tui_state.cmd_buf, L"detach") == 0) {
         if (tui_state.attached) {
-            if (tui_state.scanner_inited) {
-                scanner_session_destroy(&tui_state.scanner);
-                tui_state.scanner_inited = FALSE;
-            }
-            addr_table_set_target(&tui_state.address_table, NULL);
-            process_detach(&tui_state.target);
-            tui_state.attached = FALSE;
+            tui_detach_target();
             tui_set_status(L"Detached", FALSE);
         } else {
             tui_set_status(L"No process attached", TRUE);
@@ -188,8 +193,8 @@ void tui_exec_command(void)
         return;
     }
 
-    wchar_t msg[256];
-    swprintf_s(msg, _countof(msg), L"Unknown command: %s", tui_state.cmd_buf);
+    wchar_t msg[STATUS_MSG_MAX];
+    _snwprintf_s(msg, _countof(msg), _TRUNCATE, L"Unknown command: %s", tui_state.cmd_buf);
     tui_set_status(msg, TRUE);
     tui_state.cmd_len = 0;
 }
@@ -204,13 +209,15 @@ static void cmd_read(const wchar_t *args)
     }
 
     unsigned long long address = 0;
-    int size = 0;
-    if (swscanf_s(args, L"%llx %d", &address, &size) != 2 || size <= 0 || size > 512) {
-        tui_set_status(L"usage: read <hex_address> <size_in_bytes>", TRUE);
+    unsigned long long size = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || address == 0 ||
+        !parse_unsigned(tail, 10, 128, &size, &tail) || size == 0 || !tail_is_empty(tail)) {
+        tui_set_status(L"usage: read <hex_address> <byte_count: 1-128>", TRUE);
         return;
     }
 
-    unsigned char buf[512];
+    unsigned char buf[128];
     PlatformError err = memory_read(&tui_state.target, address, buf, (size_t)size);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
@@ -219,10 +226,15 @@ static void cmd_read(const wchar_t *args)
         return;
     }
 
-    wchar_t result[512];
+    wchar_t result[STATUS_MSG_MAX];
     int pos = 0;
-    for (int i = 0; i < size && pos < 500; i++) {
-        pos += swprintf_s(result + pos, 512 - pos, L"%02X ", buf[i]);
+    for (size_t i = 0; i < (size_t)size; i++) {
+        int written = swprintf_s(result + pos, _countof(result) - (size_t)pos, L"%02X ", buf[i]);
+        if (written < 0) {
+            tui_set_status(L"read display failed", TRUE);
+            return;
+        }
+        pos += written;
     }
     tui_set_status(result, FALSE);
 }
@@ -235,33 +247,31 @@ static void cmd_write(const wchar_t *args)
     }
 
     unsigned long long address = 0;
-    wchar_t hex[256] = {0};
-    if (swscanf_s(args, L"%llx %s", &address, hex, (unsigned int)(sizeof(hex) / sizeof(wchar_t))) != 2) {
-        tui_set_status(L"usage: write <hex_address> <hex_bytes>", TRUE);
+    const wchar_t *p = NULL;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &p) || address == 0) {
+        tui_set_status(L"usage: write <hex_address> <byte> [byte ...]", TRUE);
         return;
     }
 
     unsigned char buf[128];
-    int hex_len = (int)wcslen(hex);
-    int byte_count = hex_len / 2;
-    if (byte_count == 0 || byte_count > 128 || hex_len % 2 != 0) {
-        tui_set_status(L"invalid hex string -- even number of hex chars required", TRUE);
+    size_t byte_count = 0;
+    for (;;) {
+        p = skip_spaces(p);
+        if (!*p) break;
+        if (byte_count == _countof(buf) || hex_digit_value(p[0]) < 0 ||
+            hex_digit_value(p[1]) < 0 || (p[2] && p[2] != L' ' && p[2] != L'\t')) {
+            tui_set_status(L"usage: write <hex_address> <byte> [byte ...]", TRUE);
+            return;
+        }
+        buf[byte_count++] = (unsigned char)((hex_digit_value(p[0]) << 4) | hex_digit_value(p[1]));
+        p += 2;
+    }
+    if (byte_count == 0) {
+        tui_set_status(L"usage: write <hex_address> <byte> [byte ...]", TRUE);
         return;
     }
 
-    for (int i = 0; i < hex_len; i++) {
-        wchar_t c = hex[i];
-        if (!((c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F') || (c >= L'a' && c <= L'f'))) {
-            tui_set_status(L"invalid hex string -- non-hex characters found", TRUE);
-            return;
-        }
-    }
-
-    for (int i = 0; i < byte_count; i++) {
-        swscanf_s(hex + (i * 2), L"%2hhx", &buf[i]);
-    }
-
-    PlatformError err = memory_write(&tui_state.target, address, buf, (size_t)byte_count);
+    PlatformError err = memory_write(&tui_state.target, address, buf, byte_count);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
         swprintf_s(msg, _countof(msg), L"write failed: %S", process_error_string(err));
@@ -270,7 +280,8 @@ static void cmd_write(const wchar_t *args)
     }
 
     wchar_t msg[256];
-    swprintf_s(msg, _countof(msg), L"Wrote %d byte(s) to 0x%llX", byte_count, address);
+    swprintf_s(msg, _countof(msg), L"Wrote %llu byte(s) to 0x%llX",
+               (unsigned long long)byte_count, address);
     tui_set_status(msg, FALSE);
 }
 
@@ -395,23 +406,6 @@ static void cmd_search(const wchar_t *args)
     }
 }
 
-static int parse_wtype(const wchar_t *name, ScanType *out)
-{
-    if (wcscmp(name, L"i32")    == 0) { *out = SCAN_TYPE_I32;    return 1; }
-    if (wcscmp(name, L"i8")     == 0) { *out = SCAN_TYPE_I8;     return 1; }
-    if (wcscmp(name, L"i16")    == 0) { *out = SCAN_TYPE_I16;    return 1; }
-    if (wcscmp(name, L"i64")    == 0) { *out = SCAN_TYPE_I64;    return 1; }
-    if (wcscmp(name, L"u8")     == 0) { *out = SCAN_TYPE_U8;     return 1; }
-    if (wcscmp(name, L"u16")    == 0) { *out = SCAN_TYPE_U16;    return 1; }
-    if (wcscmp(name, L"u32")    == 0) { *out = SCAN_TYPE_U32;    return 1; }
-    if (wcscmp(name, L"u64")    == 0) { *out = SCAN_TYPE_U64;    return 1; }
-    if (wcscmp(name, L"f32")    == 0) { *out = SCAN_TYPE_F32;    return 1; }
-    if (wcscmp(name, L"f64")    == 0) { *out = SCAN_TYPE_F64;    return 1; }
-    if (wcscmp(name, L"string") == 0) { *out = SCAN_TYPE_STRING; return 1; }
-    if (wcscmp(name, L"aob")    == 0) { *out = SCAN_TYPE_AOB;    return 1; }
-    return 0;
-}
-
 static void cmd_addentry(const wchar_t *args)
 {
     if (!tui_state.attached) {
@@ -420,231 +414,234 @@ static void cmd_addentry(const wchar_t *args)
     }
 
     unsigned long long address = 0;
-    wchar_t type_name[16] = {0};
-    int consumed = 0;
-
-    if (swscanf_s(args, L"%llx %15s %n", &address, type_name,
-                  (unsigned int)_countof(type_name), &consumed) < 2) {
+    const wchar_t *p = NULL;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &p) || address == 0) {
         tui_set_status(L"usage: addentry <hex_addr> <type> <label>", TRUE);
         return;
     }
+
+    p = skip_spaces(p);
+    const wchar_t *type_start = p;
+    while (*p && *p != L' ' && *p != L'\t') p++;
+    size_t type_length = (size_t)(p - type_start);
+    if (type_length == 0 || type_length >= 16) {
+        tui_set_status(L"usage: addentry <hex_addr> <type> <label>", TRUE);
+        return;
+    }
+    char type_name[16];
+    for (size_t i = 0; i < type_length; i++) {
+        if (type_start[i] > 127) {
+            tui_set_status(L"Invalid address-table type", TRUE);
+            return;
+        }
+        type_name[i] = (char)type_start[i];
+    }
+    type_name[type_length] = '\0';
 
     ScanType type;
-    if (!parse_wtype(type_name, &type)) {
-        tui_set_status(L"usage: addentry <hex_addr> <type> <label>  type: i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|aob", TRUE);
+    if (scanner_type_from_name(type_name, &type) != PLATFORM_OK || scanner_type_width(type) == 0) {
+        tui_set_status(L"address-table type: i8|i16|i32|i64|u8|u16|u32|u64|f32|f64", TRUE);
         return;
     }
 
-    const wchar_t *label_start = args + consumed;
-    while (*label_start == L' ') label_start++;
-
-    if (*label_start == L'\0') {
-        tui_set_status(L"usage: addentry <hex_addr> <type> <label>", TRUE);
+    const wchar_t *label_start = skip_spaces(p);
+    char label[ADDR_ENTRY_LABEL_MAX];
+    if (!narrow_ascii(label_start, label, sizeof(label))) {
+        tui_set_status(L"label must be 1-63 ASCII characters without quotes or line breaks", TRUE);
         return;
     }
-
-    size_t label_len = wcslen(label_start);
-    if (label_len >= ADDR_ENTRY_LABEL_MAX) label_len = ADDR_ENTRY_LABEL_MAX - 1;
-
-    char label_narrow[ADDR_ENTRY_LABEL_MAX];
-    for (size_t i = 0; i < label_len; i++) {
-        wchar_t wc = label_start[i];
-        label_narrow[i] = (wc > 127) ? '?' : (char)wc;
-    }
-    label_narrow[label_len] = '\0';
-
-    int idx = addr_table_add(&tui_state.address_table, label_narrow, type, (uintptr_t)address);
-    if (idx < 0) {
+    if (addr_table_add(&tui_state.address_table, label, type, (uintptr_t)address) < 0) {
         tui_set_status(L"Failed to add entry", TRUE);
         return;
     }
 
-    tui_state.address_table_selected = idx;
+    int index = (int)(tui_state.address_table.count - 1);
+    tui_state.address_table_selected = index;
     wchar_t msg[STATUS_MSG_MAX];
-    swprintf_s(msg, _countof(msg), L"Added entry %d: %S at 0x%llX", idx, label_narrow, address);
+    swprintf_s(msg, _countof(msg), L"Added entry %d: %S at 0x%llX", index, label, address);
     tui_set_status(msg, FALSE);
 }
 
 static void cmd_delentry(const wchar_t *args)
 {
-    int index = (int)_wtol(args);
-    if (index < 0 || (size_t)index >= tui_state.address_table.count) {
+    size_t index = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_index(args, tui_state.address_table.count, &index, &tail) || !tail_is_empty(tail)) {
         tui_set_status(L"usage: delentry <index>", TRUE);
         return;
     }
-
-    if (addr_table_remove(&tui_state.address_table, (size_t)index) != 0) {
+    if (addr_table_remove(&tui_state.address_table, index) != 0) {
         tui_set_status(L"Failed to remove entry", TRUE);
         return;
     }
-
-    if (tui_state.address_table_selected >= (int)tui_state.address_table.count
-        && tui_state.address_table_selected > 0) {
-        tui_state.address_table_selected--;
-    }
-
+    if (tui_state.address_table_selected >= (int)tui_state.address_table.count &&
+        tui_state.address_table_selected > 0) tui_state.address_table_selected--;
     tui_set_status(L"Entry removed", FALSE);
 }
 
 static void cmd_entrylabel(const wchar_t *args)
 {
-    int index = 0;
-    int consumed = 0;
-    if (swscanf_s(args, L"%d %n", &index, &consumed) != 1) {
+    size_t index = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_index(args, tui_state.address_table.count, &index, &tail)) {
         tui_set_status(L"usage: entrylabel <index> <new_label>", TRUE);
         return;
     }
-
-    if (index < 0 || (size_t)index >= tui_state.address_table.count) {
-        tui_set_status(L"Invalid entry index", TRUE);
+    char label[ADDR_ENTRY_LABEL_MAX];
+    if (!narrow_ascii(skip_spaces(tail), label, sizeof(label))) {
+        tui_set_status(L"label must be 1-63 ASCII characters without quotes or line breaks", TRUE);
         return;
     }
-
-    const wchar_t *label_start = args + consumed;
-    while (*label_start == L' ') label_start++;
-    if (*label_start == L'\0') {
-        tui_set_status(L"usage: entrylabel <index> <new_label>", TRUE);
-        return;
-    }
-
-    size_t label_len = wcslen(label_start);
-    if (label_len >= ADDR_ENTRY_LABEL_MAX) label_len = ADDR_ENTRY_LABEL_MAX - 1;
-
-    char label_narrow[ADDR_ENTRY_LABEL_MAX];
-    for (size_t i = 0; i < label_len; i++) {
-        wchar_t wc = label_start[i];
-        label_narrow[i] = (wc > 127) ? '?' : (char)wc;
-    }
-    label_narrow[label_len] = '\0';
-
-    if (addr_table_rename(&tui_state.address_table, (size_t)index, label_narrow) != 0) {
+    if (addr_table_rename(&tui_state.address_table, index, label) != 0) {
         tui_set_status(L"Failed to rename entry", TRUE);
         return;
     }
-
     wchar_t msg[STATUS_MSG_MAX];
-    swprintf_s(msg, _countof(msg), L"Entry %d renamed to \"%S\"", index, label_narrow);
+    swprintf_s(msg, _countof(msg), L"Entry %llu renamed to \"%S\"", (unsigned long long)index, label);
     tui_set_status(msg, FALSE);
 }
 
 static void cmd_lockentry(const wchar_t *args)
 {
-    int index = 0;
-    int consumed = 0;
-    if (swscanf_s(args, L"%d %n", &index, &consumed) != 1) {
+    size_t index = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_index(args, tui_state.address_table.count, &index, &tail)) {
         tui_set_status(L"usage: lockentry <index> <value>", TRUE);
         return;
     }
-
-    if (index < 0 || (size_t)index >= tui_state.address_table.count) {
-        tui_set_status(L"Invalid entry index", TRUE);
+    const wchar_t *value_text = skip_spaces(tail);
+    if (!*value_text) {
+        tui_set_status(L"usage: lockentry <index> <value>", TRUE);
         return;
     }
 
     const AddrEntry *entry = &tui_state.address_table.entries[index];
-    if (entry->value_width == 0) {
-        tui_set_status(L"Cannot lock entry with variable/unknown width", TRUE);
-        return;
-    }
-
-    const wchar_t *value_str = args + consumed;
-    while (*value_str == L' ') value_str++;
-    if (*value_str == L'\0') {
-        tui_set_status(L"usage: lockentry <index> <value>", TRUE);
-        return;
-    }
-
-    ScanValue sv;
-    memset(&sv, 0, sizeof(sv));
-    sv.type = entry->type;
-    if (!tui_parse_scan_value(value_str, &sv)) {
+    ScanValue value = {0};
+    value.type = entry->type;
+    if (!tui_parse_scan_value(value_text, &value)) {
         tui_set_status(L"Could not parse lock value for this entry's type", TRUE);
         return;
     }
-
-    if (addr_table_lock(&tui_state.address_table, (size_t)index, sv.bytes) != 0) {
+    if (addr_table_lock(&tui_state.address_table, index, value.bytes) != 0) {
         tui_set_status(L"Failed to lock entry", TRUE);
         return;
     }
-
     wchar_t msg[STATUS_MSG_MAX];
-    swprintf_s(msg, _countof(msg), L"Entry %d locked", index);
+    swprintf_s(msg, _countof(msg), L"Entry %llu locked", (unsigned long long)index);
     tui_set_status(msg, FALSE);
 }
 
 static void cmd_unlockentry(const wchar_t *args)
 {
-    int index = (int)_wtol(args);
-    if ((unsigned int)index >= tui_state.address_table.count) {
+    size_t index = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_index(args, tui_state.address_table.count, &index, &tail) || !tail_is_empty(tail)) {
         tui_set_status(L"usage: unlockentry <index>", TRUE);
         return;
     }
-
-    if (addr_table_unlock(&tui_state.address_table, (size_t)index) != 0) {
+    if (addr_table_unlock(&tui_state.address_table, index) != 0) {
         tui_set_status(L"Failed to unlock entry", TRUE);
         return;
     }
-
     wchar_t msg[STATUS_MSG_MAX];
-    swprintf_s(msg, _countof(msg), L"Entry %d unlocked", index);
+    swprintf_s(msg, _countof(msg), L"Entry %llu unlocked", (unsigned long long)index);
     tui_set_status(msg, FALSE);
 }
 
 static void cmd_saveentry(const wchar_t *args)
 {
-    while (*args == L' ') args++;
-    if (*args == L'\0') {
+    const wchar_t *filepath = skip_spaces(args);
+    if (!*filepath) {
         tui_set_status(L"usage: saveentry <filename>", TRUE);
         return;
     }
-
-    char filename_narrow[260];
-    size_t flen = wcslen(args);
-    if (flen >= sizeof(filename_narrow)) flen = sizeof(filename_narrow) - 1;
-    for (size_t i = 0; i < flen; i++) {
-        wchar_t wc = args[i];
-        filename_narrow[i] = (wc > 127) ? '_' : (char)wc;
-    }
-    filename_narrow[flen] = '\0';
-
-    if (!addr_table_save(&tui_state.address_table, filename_narrow)) {
-        tui_set_status(L"Failed to save address table", TRUE);
+    AddrTableIoError error = addr_table_save(&tui_state.address_table, filepath);
+    if (error != ADDR_TABLE_IO_OK) {
+        wchar_t msg[256];
+        swprintf_s(msg, _countof(msg), L"Save failed: %S", addr_table_io_error_string(error));
+        tui_set_status(msg, TRUE);
         return;
     }
-
     wchar_t msg[STATUS_MSG_MAX];
     swprintf_s(msg, _countof(msg), L"Saved %llu entries to \"%s\"",
-               (unsigned long long)tui_state.address_table.count, args);
+               (unsigned long long)tui_state.address_table.count, filepath);
     tui_set_status(msg, FALSE);
 }
 
 static void cmd_loadentry(const wchar_t *args)
 {
-    while (*args == L' ') args++;
-    if (*args == L'\0') {
+    const wchar_t *filepath = skip_spaces(args);
+    if (!*filepath) {
         tui_set_status(L"usage: loadentry <filename>", TRUE);
         return;
     }
-
-    char filename_narrow[260];
-    size_t flen = wcslen(args);
-    if (flen >= sizeof(filename_narrow)) flen = sizeof(filename_narrow) - 1;
-    for (size_t i = 0; i < flen; i++) {
-        wchar_t wc = args[i];
-        filename_narrow[i] = (wc > 127) ? '_' : (char)wc;
-    }
-    filename_narrow[flen] = '\0';
-
-    if (!addr_table_load(&tui_state.address_table, filename_narrow)) {
-        tui_set_status(L"Failed to load address table -- malformed file", TRUE);
+    AddrTableIoError error = addr_table_load(&tui_state.address_table, filepath);
+    if (error != ADDR_TABLE_IO_OK) {
+        wchar_t msg[256];
+        swprintf_s(msg, _countof(msg), L"Load failed: %S", addr_table_io_error_string(error));
+        tui_set_status(msg, TRUE);
         return;
     }
-
     tui_state.address_table_selected = 0;
     tui_state.address_table_scroll = 0;
-
     wchar_t msg[STATUS_MSG_MAX];
     swprintf_s(msg, _countof(msg), L"Loaded %llu entries from \"%s\"",
-               (unsigned long long)tui_state.address_table.count, args);
+               (unsigned long long)tui_state.address_table.count, filepath);
     tui_set_status(msg, FALSE);
+}
+
+static const wchar_t *skip_spaces(const wchar_t *text)
+{
+    while (*text == L' ' || *text == L'\t') text++;
+    return text;
+}
+
+static int parse_unsigned(const wchar_t *text, int base, unsigned long long maximum,
+                          unsigned long long *value, const wchar_t **tail)
+{
+    if (!text || !value || !tail) return 0;
+    text = skip_spaces(text);
+    if (!*text || *text == L'-' || *text == L'+') return 0;
+    errno = 0;
+    wchar_t *end = NULL;
+    unsigned long long parsed = wcstoull(text, &end, base);
+    if (errno == ERANGE || end == text || parsed > maximum ||
+        (*end && *end != L' ' && *end != L'\t')) return 0;
+    *value = parsed;
+    *tail = end;
+    return 1;
+}
+
+static int parse_index(const wchar_t *text, size_t count, size_t *index, const wchar_t **tail)
+{
+    unsigned long long parsed = 0;
+    if (!parse_unsigned(text, 10, SIZE_MAX, &parsed, tail) || parsed >= count) return 0;
+    *index = (size_t)parsed;
+    return 1;
+}
+
+static int tail_is_empty(const wchar_t *text)
+{
+    return *skip_spaces(text) == L'\0';
+}
+
+static int narrow_ascii(const wchar_t *text, char *output, size_t capacity)
+{
+    if (!text || !output || capacity == 0) return 0;
+    size_t length = wcslen(text);
+    if (length == 0 || length >= capacity) return 0;
+    for (size_t i = 0; i < length; i++) {
+        if (text[i] > 127 || text[i] == L'"' || text[i] == L'\r' || text[i] == L'\n') return 0;
+        output[i] = (char)text[i];
+    }
+    output[length] = '\0';
+    return 1;
+}
+
+static int hex_digit_value(wchar_t c)
+{
+    if (c >= L'0' && c <= L'9') return (int)(c - L'0');
+    if (c >= L'a' && c <= L'f') return (int)(c - L'a') + 10;
+    if (c >= L'A' && c <= L'F') return (int)(c - L'A') + 10;
+    return -1;
 }

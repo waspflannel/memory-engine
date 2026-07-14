@@ -81,7 +81,8 @@ extern TuiState tui_state;
 
 /* helpers.c -- shared app state + scan-value parsing. */
 void           tui_set_status(const wchar_t *msg, int is_error);
-void           tui_refresh_process_list(void);
+int            tui_refresh_process_list(void);
+void           tui_detach_target(void);
 int            tui_do_attach(DWORD pid);
 void           tui_attach_to_selected(void);
 const wchar_t *tui_scan_type_name(ScanType type);
@@ -93,6 +94,7 @@ int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
 void           tui_set_process_filter(const wchar_t *needle);
 void           tui_clear_process_filter(void);
 int            tui_process_filter_active(void);
+DWORD          tui_next_wait_timeout(ULONGLONG now);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
 void           tui_exec_command(void);

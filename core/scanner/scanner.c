@@ -133,12 +133,13 @@ void scanner_session_destroy(ScanSession *session)
 {
     if (!session) return;
     results_free(&session->results);
-    session->target = NULL;
+    memset(session, 0, sizeof(*session));
 }
 
 PlatformError scanner_find_hits(const ScanSession *session, const ScanRegion *regions, size_t count, ScanResults *out)
 {
-    if (!session || !regions || !out) return PLATFORM_ERR_INVALID_PARAM;
+    if (!session || !session->target || !session->target->handle || !out ||
+        (count > 0 && !regions)) return PLATFORM_ERR_INVALID_PARAM;
     unsigned short width = session->param.width;
     if (width == 0) {
         return PLATFORM_ERR_INVALID_PARAM;
@@ -187,6 +188,7 @@ PlatformError scanner_first_scan(ScanSession *session)
             return e;
         }
         session->results = new_results;
+        session->results_type = session->param.type;
         session->has_results = 1;
         return PLATFORM_OK;
     }
@@ -250,6 +252,7 @@ PlatformError scanner_first_scan(ScanSession *session)
         return me;
     }
     session->results = new_results;
+    session->results_type = session->param.type;
     session->has_results = 1;
     return PLATFORM_OK;
 }
@@ -262,7 +265,8 @@ PlatformError scanner_next_scan(ScanSession *session)
     if (!session->has_results) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
-    if (session->param.width == 0 || session->param.width != session->results.value_width) {
+    if (session->param.width == 0 || session->param.width != session->results.value_width ||
+        session->param.type != session->results_type) {
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
@@ -324,6 +328,10 @@ PlatformError scanner_list_regions(const Target *target, ScanRegion **regions, s
         int accessible = (info.protect != PAGE_NOACCESS) && !(info.protect & PAGE_GUARD);
         if (committed && accessible) {
             if (n >= cap) {
+                if (cap > SIZE_MAX / 2 || cap * 2 > SIZE_MAX / sizeof(*list)) {
+                    free(list);
+                    return PLATFORM_ERR_INTERNAL;
+                }
                 size_t new_cap = cap * 2;
                 ScanRegion *grown = (ScanRegion *)realloc(list, new_cap * sizeof(ScanRegion));
                 if (!grown) {
@@ -410,7 +418,8 @@ static PlatformError match_regions(const ScanSession *session, const ScanRegion 
             size_t take = remaining < SCAN_CHUNK_BYTES ? remaining : SCAN_CHUNK_BYTES;
             PlatformError rd = memory_read(session->target, addr, buf, take);
             if (rd != PLATFORM_OK) {
-                break;
+                result = rd;
+                goto done;
             }
 
             size_t last = take - W;
@@ -445,7 +454,10 @@ static PlatformError merge_worker_results(ScanWork *works, int n, unsigned short
 {
     size_t total = 0;
     for (int i = 0; i < n; i++) {
-        if (works[i].results.count > SIZE_MAX - total) return PLATFORM_ERR_INTERNAL;
+        if (works[i].results.count > SIZE_MAX - total) {
+            for (int j = 0; j < n; j++) results_free(&works[j].results);
+            return PLATFORM_ERR_INTERNAL;
+        }
         total += works[i].results.count;
     }
 
@@ -496,7 +508,7 @@ static const ScanTypeInfo *find_type(ScanType type)
 
 static int grow_results(ScanResults *results, size_t capacity)
 {
-    if (capacity > SIZE_MAX / sizeof(*results->addresses) ||
+    if (capacity < results->count || capacity > SIZE_MAX / sizeof(*results->addresses) ||
         capacity > SIZE_MAX / results->value_width) return 0;
     unsigned long long *addresses = (unsigned long long *)malloc(capacity * sizeof(*addresses));
     unsigned char *values = (unsigned char *)malloc(capacity * results->value_width);
@@ -506,8 +518,10 @@ static int grow_results(ScanResults *results, size_t capacity)
         return 0;
     }
     if (results->count) {
-        memcpy(addresses, results->addresses, results->count * sizeof(*addresses));
-        memcpy(values, results->values, results->count * results->value_width);
+        memcpy_s(addresses, capacity * sizeof(*addresses), results->addresses,
+                 results->count * sizeof(*addresses));
+        memcpy_s(values, capacity * results->value_width, results->values,
+                 results->count * results->value_width);
     }
     free(results->addresses);
     free(results->values);

@@ -4,6 +4,7 @@
 #include <wchar.h>
 
 #define HELP_COUNT(a) ((int)(sizeof(a) / sizeof((a)[0])))
+#define TUI_COMMAND_HELP_COUNT 17
 
 typedef struct {
     const wchar_t *term;
@@ -27,6 +28,8 @@ typedef struct {
 const HelpBook *tui_help_processes_book(void);
 const HelpBook *tui_help_scanner_book(void);
 const HelpBook *tui_help_address_table_book(void);
+
+extern const HelpEntry tui_command_help_entries[TUI_COMMAND_HELP_COUNT];
 
 /* Returns the help book for the given panel enum, or NULL if none. */
 const HelpBook *tui_help_book_for_panel(int panel);
