@@ -347,13 +347,23 @@ static void draw_scanner_panel(Screen *screen)
     if (s->param.width > 16) {
         pos += swprintf_s(hex + pos, _countof(hex) - pos, L"...");
     }
-    swprintf_s(line, _countof(line), L"%s  results: %llu", hex, (unsigned long long)s->results.count);
-    screen_text(screen, main_x, row++, line, s_attr_normal);
+    if (s->results.skipped_regions > 0) {
+        swprintf_s(line, _countof(line), L"%s  results: %llu  skipped: %llu", hex,
+                   (unsigned long long)s->results.count,
+                   (unsigned long long)s->results.skipped_regions);
+        screen_text(screen, main_x, row++, line, s_attr_error);
+    } else {
+        swprintf_s(line, _countof(line), L"%s  results: %llu", hex,
+                   (unsigned long long)s->results.count);
+        screen_text(screen, main_x, row++, line, s_attr_normal);
+    }
 
     row++;  /* blank separator */
 
     if (!s->has_results) {
         screen_text(screen, main_x, row, L"Run `scan <value>` to find (use `type <name>` to pick type)", s_attr_normal);
+    } else if (s->results.count == 0 && s->results.skipped_regions > 0) {
+        screen_text(screen, main_x, row, L"No hits in readable regions -- some regions were skipped", s_attr_error);
     } else if (s->results.count == 0) {
         screen_text(screen, main_x, row, L"No survivors -- try a different value or run `scan` again", s_attr_error);
     } else {

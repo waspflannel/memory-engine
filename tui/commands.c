@@ -304,10 +304,17 @@ static void cmd_scan(const wchar_t *args)
         return;
     }
 
-    wchar_t msg[128];
-    swprintf_s(msg, _countof(msg), L"First scan: %llu hits",
-               (unsigned long long)tui_state.scanner.results.count);
-    tui_set_status(msg, FALSE);
+    wchar_t msg[160];
+    if (tui_state.scanner.results.skipped_regions > 0) {
+        swprintf_s(msg, _countof(msg), L"First scan: %llu hits; %llu region(s) skipped",
+                   (unsigned long long)tui_state.scanner.results.count,
+                   (unsigned long long)tui_state.scanner.results.skipped_regions);
+        tui_set_status(msg, TRUE);
+    } else {
+        swprintf_s(msg, _countof(msg), L"First scan: %llu hits",
+                   (unsigned long long)tui_state.scanner.results.count);
+        tui_set_status(msg, FALSE);
+    }
 }
 
 static void cmd_next(const wchar_t *args)

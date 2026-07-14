@@ -6,9 +6,14 @@
 #include "core/scanner/scanner.h"
 
 /* Duplicated Win32 values; the platform layer passes these through raw. */
-#define MEM_COMMIT      0x00001000u
-#define PAGE_NOACCESS   0x00000001u
-#define PAGE_GUARD      0x00000100u
+#define MEM_COMMIT             0x00001000u
+#define PAGE_READONLY          0x00000002u
+#define PAGE_READWRITE         0x00000004u
+#define PAGE_WRITECOPY         0x00000008u
+#define PAGE_EXECUTE_READ      0x00000020u
+#define PAGE_EXECUTE_READWRITE 0x00000040u
+#define PAGE_EXECUTE_WRITECOPY 0x00000080u
+#define PAGE_GUARD             0x00000100u
 
 #define SCAN_CHUNK_BYTES 65536
 
@@ -57,6 +62,7 @@ void results_init(ScanResults *results)
     results->values       = NULL;
     results->count        = 0;
     results->capacity     = 0;
+    results->skipped_regions = 0;
     results->value_width  = 0;
 }
 
@@ -69,6 +75,7 @@ void results_free(ScanResults *results)
     results->values     = NULL;
     results->count      = 0;
     results->capacity   = 0;
+    results->skipped_regions = 0;
     results->value_width = 0;
 }
 
@@ -315,8 +322,13 @@ PlatformError scanner_list_regions(const Target *target, ScanRegion **regions, s
             return err;
         }
 
+        unsigned int base_protect = info.protect & 0xFFu;
         int committed = (info.state == MEM_COMMIT);
-        int accessible = (info.protect != PAGE_NOACCESS) && !(info.protect & PAGE_GUARD);
+        int readable = base_protect == PAGE_READONLY || base_protect == PAGE_READWRITE ||
+                       base_protect == PAGE_WRITECOPY || base_protect == PAGE_EXECUTE_READ ||
+                       base_protect == PAGE_EXECUTE_READWRITE ||
+                       base_protect == PAGE_EXECUTE_WRITECOPY;
+        int accessible = readable && !(info.protect & PAGE_GUARD);
         if (committed && accessible) {
             if (n >= cap) {
                 if (cap > SIZE_MAX / 2 || cap * 2 > SIZE_MAX / sizeof(*list)) {
@@ -409,7 +421,17 @@ static PlatformError match_regions(const ScanSession *session, const ScanRegion 
             size_t take = remaining < SCAN_CHUNK_BYTES ? remaining : SCAN_CHUNK_BYTES;
             PlatformError rd = memory_read(session->target, addr, buf, take);
             if (rd != PLATFORM_OK) {
-                result = rd;
+                if (rd == PLATFORM_ERR_READ_FAILED || rd == PLATFORM_ERR_PARTIAL_READ) {
+                    int alive = 0;
+                    PlatformError alive_error = process_is_alive(session->target, &alive);
+                    if (alive_error == PLATFORM_OK && alive) {
+                        out->skipped_regions++;
+                        break;
+                    }
+                    result = alive_error != PLATFORM_OK ? alive_error : rd;
+                } else {
+                    result = rd;
+                }
                 goto done;
             }
 
@@ -444,16 +466,20 @@ static int worker_fn(void *arg)
 static PlatformError merge_worker_results(ScanWork *works, int n, unsigned short width, ScanResults *out)
 {
     size_t total = 0;
+    size_t skipped_regions = 0;
     for (int i = 0; i < n; i++) {
-        if (works[i].results.count > SIZE_MAX - total) {
+        if (works[i].results.count > SIZE_MAX - total ||
+            works[i].results.skipped_regions > SIZE_MAX - skipped_regions) {
             for (int j = 0; j < n; j++) results_free(&works[j].results);
             return PLATFORM_ERR_INTERNAL;
         }
         total += works[i].results.count;
+        skipped_regions += works[i].results.skipped_regions;
     }
 
     results_init(out);
     out->value_width = width;
+    out->skipped_regions = skipped_regions;
     if (total == 0) {
         for (int i = 0; i < n; i++) results_free(&works[i].results);
         return PLATFORM_OK;

@@ -16,6 +16,7 @@ typedef struct {
     unsigned char      *values;
     size_t              count;
     size_t              capacity;
+    size_t              skipped_regions;
     unsigned short      value_width;
 } ScanResults;
 

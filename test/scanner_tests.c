@@ -320,6 +320,56 @@ int main(void)
             scanner_session_destroy(&session);
             VirtualFree(memory, 0, MEM_RELEASE);
         }
+
+        SYSTEM_INFO system_info = {0};
+        GetSystemInfo(&system_info);
+        size_t page_size = system_info.dwPageSize;
+        unsigned char *split_memory = (unsigned char *)VirtualAlloc(NULL, page_size * 2,
+            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        check(split_memory != NULL, "allocate controlled split-protection region");
+        if (split_memory) {
+            const unsigned char pattern[] = { 0xFA, 0xCE, 0xCA, 0xFE };
+            memset(split_memory, 0, page_size * 2);
+            memcpy(split_memory + page_size - 2, pattern, sizeof(pattern));
+
+            DWORD old_protect = 0;
+            BOOL made_readonly = VirtualProtect(split_memory + page_size, page_size,
+                                                PAGE_READONLY, &old_protect);
+            check(made_readonly != 0, "split adjacent pages into readable protections");
+            if (made_readonly) {
+                ScanSession session;
+                scanner_session_init(&session, &self, SCAN_TYPE_AOB);
+                scanner_value_set(&session.param, SCAN_TYPE_AOB, pattern, sizeof(pattern));
+                ScanRegion region = {
+                    (unsigned long long)(UINT_PTR)split_memory,
+                    page_size * 2,
+                };
+                ScanResults results;
+                results_init(&results);
+                check(scanner_find_hits(&session, &region, 1, &results) == PLATFORM_OK,
+                      "scan crosses adjacent readable protection regions");
+                check(find_addr(&results, region.base + page_size - 2),
+                      "match spanning a readable protection boundary is found");
+                check(results.skipped_regions == 0,
+                      "readable protection boundary is not reported as skipped");
+                results_free(&results);
+
+                DWORD readonly_protect = 0;
+                BOOL made_inaccessible = VirtualProtect(split_memory + page_size, page_size,
+                                                        PAGE_NOACCESS, &readonly_protect);
+                check(made_inaccessible != 0, "make an enumerated page inaccessible");
+                if (made_inaccessible) {
+                    results_init(&results);
+                    check(scanner_find_hits(&session, &region, 1, &results) == PLATFORM_OK,
+                          "live inaccessible region does not abort first-scan matching");
+                    check(results.skipped_regions == 1,
+                          "live inaccessible region is counted as skipped");
+                    results_free(&results);
+                }
+                scanner_session_destroy(&session);
+            }
+            VirtualFree(split_memory, 0, MEM_RELEASE);
+        }
     }
 
     printf("--- T9: target exit is loud and scan state stays atomic ---\n");

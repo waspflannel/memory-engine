@@ -83,7 +83,8 @@ static void test_scanner_boundary(void)
     printf("--- scanner boundary validation ---\n");
     ScanResults results;
     results_init(&results);
-    check(results.count == 0, "results_init zeroes count");
+    check(results.count == 0 && results.skipped_regions == 0,
+          "results_init zeroes count and skipped-region diagnostics");
     results_free(&results);
 
     Target empty_target = {0};
