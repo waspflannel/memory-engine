@@ -262,7 +262,7 @@ int main(void)
         scanner_session_destroy(&s);
     }
 
-    printf("--- T7: UTF-16 string scan + AOB with wildcards ---\n");
+    printf("--- T7: UTF-16 string scan + exact AOB ---\n");
     {
         ScanSession s;
         scanner_session_init(&s, &target, SCAN_TYPE_STRING);
@@ -276,12 +276,9 @@ int main(void)
         scanner_session_destroy(&s);
 
         scanner_session_init(&s, &target, SCAN_TYPE_AOB);
-        unsigned char pat[10]  = { 0x54,0x00, 0,0, 0,0, 0x74,0x00, 0x54,0x00 };
-        unsigned char wild[10] = { 0,0,      1,1, 1,1, 0,0,      0,0 };
-        scanner_value_set(&s.param, SCAN_TYPE_AOB, pat, sizeof(pat));
-        scanner_value_set_wildcard(&s.param, wild, sizeof(wild));
+        scanner_value_set(&s.param, SCAN_TYPE_AOB, u16, sizeof(u16));
         scanner_first_scan(&s);
-        check(find_addr(&s.results, name_addr), "AOB with 4 wildcard bytes finds target_name");
+        check(find_addr(&s.results, name_addr), "exact AOB scan finds target_name");
         scanner_session_destroy(&s);
     }
 

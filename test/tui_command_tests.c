@@ -87,6 +87,15 @@ int main(void)
     check(!tui_parse_scan_value(L"10junk", &value), "numeric scan value rejects trailing junk");
     check(tui_parse_scan_value(L"10", &value), "strict numeric scan value accepts a complete token");
 
+    value = (ScanValue){0};
+    value.type = SCAN_TYPE_AOB;
+    check(tui_parse_scan_value(L"48 8B 10 90", &value) && value.width == 4 &&
+          value.bytes[0] == 0x48 && value.bytes[1] == 0x8B &&
+          value.bytes[2] == 0x10 && value.bytes[3] == 0x90,
+          "AOB scan value accepts exact byte pairs");
+    check(!tui_parse_scan_value(L"48 ?? 10 90", &value),
+          "AOB scan value rejects wildcard byte pairs");
+
     run_command(L"delentry 0");
     check(tui_state.address_table.count == 0, "valid delentry still removes the selected entry");
     addr_table_destroy(&tui_state.address_table);

@@ -104,19 +104,10 @@ PlatformError scanner_value_set(ScanValue *value, ScanType type, const void *byt
     if ((w && (!bytes || len < w)) || (!w && (!bytes || len == 0 || len > SCAN_VALUE_MAX))) {
         value->width = 0;
         memset(value->bytes, 0, sizeof(value->bytes));
-        memset(value->wild, 0, sizeof(value->wild));
         return PLATFORM_ERR_INVALID_PARAM;
     }
     value->width = w ? w : (unsigned short)len;
     memcpy(value->bytes, bytes, value->width);
-    memset(value->wild, 0, sizeof(value->wild));
-    return PLATFORM_OK;
-}
-
-PlatformError scanner_value_set_wildcard(ScanValue *value, const unsigned char *wild, size_t len)
-{
-    if (!value || !wild || len != value->width || len > SCAN_VALUE_MAX) return PLATFORM_ERR_INVALID_PARAM;
-    memcpy(value->wild, wild, len);
     return PLATFORM_OK;
 }
 
@@ -374,7 +365,7 @@ void scanner_free_regions(ScanRegion *regions)
 static int value_equals(const unsigned char *cur, const ScanValue *p)
 {
     for (unsigned short i = 0; i < p->width; i++) {
-        if (!p->wild[i] && cur[i] != p->bytes[i]) {
+        if (cur[i] != p->bytes[i]) {
             return 0;
         }
     }

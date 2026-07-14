@@ -252,7 +252,6 @@ static int tail_is_empty(const wchar_t *text)
 static int parse_aob_value(const wchar_t *args, ScanValue *out)
 {
     unsigned char bytes[SCAN_VALUE_MAX];
-    unsigned char wild[SCAN_VALUE_MAX];
     size_t n = 0;
 
     const wchar_t *p = args;
@@ -262,13 +261,7 @@ static int parse_aob_value(const wchar_t *args, ScanValue *out)
 
         if (n >= SCAN_VALUE_MAX) return 0;
 
-        if (p[0] == L'?' && p[1] == L'?') {
-            wild[n] = 1;
-            bytes[n] = 0;
-            n++;
-            p += 2;
-        } else if (is_hex_wchar(p[0]) && is_hex_wchar(p[1])) {
-            wild[n] = 0;
+        if (is_hex_wchar(p[0]) && is_hex_wchar(p[1])) {
             bytes[n] = (unsigned char)((hex_wchar_value(p[0]) << 4) | hex_wchar_value(p[1]));
             n++;
             p += 2;
@@ -280,8 +273,7 @@ static int parse_aob_value(const wchar_t *args, ScanValue *out)
 
     if (n == 0) return 0;
 
-    return scanner_value_set(out, SCAN_TYPE_AOB, bytes, n) == PLATFORM_OK &&
-           scanner_value_set_wildcard(out, wild, n) == PLATFORM_OK;
+    return scanner_value_set(out, SCAN_TYPE_AOB, bytes, n) == PLATFORM_OK;
 }
 
 static int parse_string_value(const wchar_t *args, ScanValue *out)

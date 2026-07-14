@@ -12,7 +12,7 @@ static const HelpEntry types_entries[] = {
     { L"f32",    L"32-bit IEEE 754 float, ~7 digits precision, 4 bytes" },
     { L"f64",    L"64-bit IEEE 754 double, ~15 digits precision, 8 bytes" },
     { L"string", L"variable-length text; set encoding with `strenc` (see Strings & AOB tab)" },
-    { L"aob",    L"array of bytes; space-separated hex pairs with `??` wildcards (see Strings & AOB tab)" },
+    { L"aob",    L"array of bytes; space-separated exact hex pairs (see Strings & AOB tab)" },
 };
 
 static const HelpEntry modes_entries[] = {
@@ -23,8 +23,7 @@ static const HelpEntry encodings_entries[] = {
     { L"strenc ascii", L"one byte per character for plain text; non-ASCII characters (>= 128) are rejected on input" },
     { L"strenc utf16", L"two bytes per character, little-endian byte order; this is how Windows stores wide strings internally" },
     { L"utf-8",        L"not yet supported (deferred -- search as raw AOB bytes for now; see tech-debt tracker)" },
-    { L"aob format",   L"space-separated hex byte pairs, e.g. `48 8B 10 90` or `48 ?? ?? 90`" },
-    { L"??",           L"wildcard placeholder -- matches any byte at that position; only valid in AOB patterns" },
+    { L"aob format",   L"space-separated exact hex byte pairs, e.g. `48 8B 10 90`" },
     { L"raw compare",  L"scanner compares raw bytes directly; no endianness conversion is applied -- the bytes you type are the bytes read from memory" },
 };
 

@@ -342,11 +342,7 @@ static void draw_scanner_panel(Screen *screen)
     int pos = swprintf_s(hex, _countof(hex), L"value(hex): ");
     unsigned short shown = s->param.width > 16 ? 16 : s->param.width;
     for (unsigned short i = 0; i < shown && pos + 4 < (int)_countof(hex); i++) {
-        if (s->param.wild[i]) {
-            pos += swprintf_s(hex + pos, _countof(hex) - pos, L"?? ");
-        } else {
-            pos += swprintf_s(hex + pos, _countof(hex) - pos, L"%02X ", s->param.bytes[i]);
-        }
+        pos += swprintf_s(hex + pos, _countof(hex) - pos, L"%02X ", s->param.bytes[i]);
     }
     if (s->param.width > 16) {
         pos += swprintf_s(hex + pos, _countof(hex) - pos, L"...");

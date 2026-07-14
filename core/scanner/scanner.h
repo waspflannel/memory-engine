@@ -44,7 +44,6 @@ typedef struct {
     ScanType       type;
     unsigned short width;
     unsigned char  bytes[SCAN_VALUE_MAX];
-    unsigned char  wild[SCAN_VALUE_MAX];        /* 1 = wildcard, 0 = literal */
 } ScanValue;
 
 typedef struct {
@@ -60,7 +59,6 @@ const char    *scanner_type_name(ScanType type);
 PlatformError  scanner_type_from_name(const char *name, ScanType *type);
 
 PlatformError scanner_value_set(ScanValue *value, ScanType type, const void *bytes, size_t len);
-PlatformError scanner_value_set_wildcard(ScanValue *value, const unsigned char *wild, size_t len);
 
 void           scanner_session_init(ScanSession *session, const Target *target, ScanType type);
 void           scanner_session_destroy(ScanSession *session);
