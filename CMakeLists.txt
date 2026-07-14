@@ -12,9 +12,14 @@ add_executable(memforge
     tui/helpers.c
     tui/render.c
     tui/help.c
+    tui/help_books/commands.c
+    tui/help_books/processes.c
+    tui/help_books/scanner.c
+    tui/help_books/address_table.c
     core/process/process.c
     core/memory/memory.c
     core/scanner/scanner.c
+    core/address_table/address_table.c
     platform/platform.c
 )
 
@@ -49,6 +54,37 @@ target_compile_options(scanner_tests PRIVATE /W4 /WX /wd5105)
 target_include_directories(scanner_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(scanner_tests PRIVATE psapi)
 
+add_executable(address_table_tests
+    test/address_table_tests.c
+    core/address_table/address_table.c
+    core/scanner/scanner.c
+    core/memory/memory.c
+    core/process/process.c
+    platform/platform.c
+)
+target_compile_options(address_table_tests PRIVATE /W4 /WX /wd5105)
+target_include_directories(address_table_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(address_table_tests PRIVATE psapi)
+
+add_executable(tui_command_tests
+    test/tui_command_tests.c
+    tui/commands.c
+    tui/helpers.c
+    tui/help.c
+    tui/help_books/commands.c
+    tui/help_books/processes.c
+    tui/help_books/scanner.c
+    tui/help_books/address_table.c
+    core/address_table/address_table.c
+    core/scanner/scanner.c
+    core/memory/memory.c
+    core/process/process.c
+    platform/platform.c
+)
+target_compile_options(tui_command_tests PRIVATE /W4 /WX /wd5105)
+target_include_directories(tui_command_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(tui_command_tests PRIVATE psapi)
+
 enable_testing()
 add_test(NAME core_tests COMMAND core_tests)
 # scanner_tests spawns test_target.exe as its child; run it next to the built
@@ -56,3 +92,7 @@ add_test(NAME core_tests COMMAND core_tests)
 # subdir.
 add_test(NAME scanner_tests COMMAND scanner_tests
          WORKING_DIRECTORY $<TARGET_FILE_DIR:scanner_tests>)
+add_test(NAME address_table_tests COMMAND address_table_tests
+         WORKING_DIRECTORY $<TARGET_FILE_DIR:address_table_tests>)
+add_test(NAME tui_command_tests COMMAND tui_command_tests
+         WORKING_DIRECTORY $<TARGET_FILE_DIR:tui_command_tests>)

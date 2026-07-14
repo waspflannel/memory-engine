@@ -1,0 +1,21 @@
+#include "tui/help.h"
+
+const HelpEntry tui_command_help_entries[TUI_COMMAND_HELP_COUNT] = {
+    { L"attach <pid>", L"attach to a running target process by its numeric PID" },
+    { L"detach", L"detach from the current target; saved table entries remain inert" },
+    { L"search [name]", L"filter process image names case-insensitively; omit the name to clear the filter" },
+    { L"read <addr> <n>", L"read 1-128 bytes from a hexadecimal address and show every byte in the status line" },
+    { L"write <addr> <byte> [byte ...]", L"write one or more whitespace-separated hexadecimal byte pairs, for example `write 1234 90 90`" },
+    { L"scan <value>", L"start a fresh exact scan using the current scanner type" },
+    { L"next <value>", L"re-read and retain existing results that exactly match the new value" },
+    { L"type <name>", L"select i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|aob and clear prior results" },
+    { L"strenc ascii|utf16", L"select the encoding used by string scans" },
+    { L"addentry <addr> <type> <label>", L"save a fixed-width address under an ASCII label" },
+    { L"delentry <index>", L"remove an address-table entry by its zero-based index" },
+    { L"entrylabel <index> <label>", L"replace an entry's ASCII label" },
+    { L"lockentry <index> <value>", L"write a fixed value to an entry every 50 ms while its target remains attached" },
+    { L"unlockentry <index>", L"stop writing the locked value for an entry" },
+    { L"saveentry <filename>", L"save the current address table to a strict text file" },
+    { L"loadentry <filename>", L"transactionally load an address table; persisted locks remain disabled" },
+    { L"help / ? / quit / exit", L"open panel help or close MemForge" },
+};

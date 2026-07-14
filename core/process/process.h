@@ -22,8 +22,11 @@ typedef struct {
 PlatformError process_list(ProcessEntry **entries, unsigned int *count);
 void          process_free_list(ProcessEntry *entries);
 
+void          process_target_init(Target *target);
+/* target must have been initialized and must not already own a process handle. */
 PlatformError process_attach(unsigned int pid, Target *target);
 void          process_detach(Target *target);
+PlatformError process_is_alive(const Target *target, int *alive);
 
 PlatformError process_enable_privilege(void);
 

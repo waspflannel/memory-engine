@@ -15,6 +15,8 @@
 
 #define INPUT_RECORD_BATCH 16
 #define SCANNER_LIST_ROWS 20
+#define MIN_LAYOUT_WIDTH 40
+#define MIN_LAYOUT_HEIGHT 10
 
 /* Box-drawing glyphs -- semantic roles, not Unicode code points */
 #define BOX_TL     L'\x250C'
@@ -58,13 +60,16 @@ static void draw_header(Screen *screen);
 static void draw_sidebar(Screen *screen);
 static void draw_process_list(Screen *screen);
 static void draw_scanner_panel(Screen *screen);
+static void draw_address_table_panel(Screen *screen);
 static void draw_main_panel(Screen *screen);
 static void draw_command(Screen *screen);
 static void draw_help(Screen *screen);
 static int  draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *text, WORD attr, int max_rows);
-static void render(void);
+static int  render(void);
 static void handle_key(WORD vk, WCHAR ch);
-static void read_input(void);
+static void read_input(DWORD timeout);
+static void tick_address_table(void);
+static int  update_console_size(void);
 
 /* ---- Public API (order matches tui.h) ---- */
 
@@ -73,7 +78,8 @@ int tui_init(void)
     tui_state.hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     tui_state.hIn  = GetStdHandle(STD_INPUT_HANDLE);
 
-    if (tui_state.hOut == INVALID_HANDLE_VALUE || tui_state.hIn == INVALID_HANDLE_VALUE) {
+    if (!tui_state.hOut || !tui_state.hIn ||
+        tui_state.hOut == INVALID_HANDLE_VALUE || tui_state.hIn == INVALID_HANDLE_VALUE) {
         return -1;
     }
 
@@ -81,33 +87,38 @@ int tui_init(void)
     if (!GetConsoleScreenBufferInfo(tui_state.hOut, &csbi)) return -1;
     tui_state.width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
     tui_state.height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-    if (tui_state.width < 80) tui_state.width = 80;
-    if (tui_state.height < 25) tui_state.height = 25;
 
     CONSOLE_CURSOR_INFO ci = {0};
-    GetConsoleCursorInfo(tui_state.hOut, &ci);
+    if (!GetConsoleCursorInfo(tui_state.hOut, &ci)) return -1;
     ci.bVisible = FALSE;
-    SetConsoleCursorInfo(tui_state.hOut, &ci);
+    if (!SetConsoleCursorInfo(tui_state.hOut, &ci)) return -1;
 
-    SetConsoleTitleW(L"MemForge");
+    if (!SetConsoleTitleW(L"MemForge")) return -1;
 
-    DWORD mode;
-    GetConsoleMode(tui_state.hIn, &mode);
+    DWORD mode = 0;
+    if (!GetConsoleMode(tui_state.hIn, &mode)) return -1;
     mode &= ~ENABLE_PROCESSED_INPUT;
     mode &= ~ENABLE_LINE_INPUT;
     mode &= ~ENABLE_ECHO_INPUT;
     mode |= ENABLE_WINDOW_INPUT;
-    SetConsoleMode(tui_state.hIn, mode);
+    if (!SetConsoleMode(tui_state.hIn, mode)) return -1;
 
     tui_state.panel        = PANEL_PROCESSES;
     tui_state.sidebar_idx  = 0;
     tui_state.focus        = FOCUS_SIDEBAR;
     tui_state.running      = TRUE;
 
-    memset(&tui_state.target, 0, sizeof(tui_state.target));
+    process_target_init(&tui_state.target);
     tui_state.attached = FALSE;
     tui_state.scanner_inited = FALSE;
     tui_state.string_enc = 0;
+
+    if (!addr_table_init(&tui_state.address_table, NULL)) return -1;
+    tui_state.address_table_scroll = 0;
+    tui_state.address_table_selected = 0;
+    tui_state.address_table_last_refresh = 0;
+    tui_state.address_table_last_lock = 0;
+    tui_state.scanner_selected_index = 0;
 
     tui_state.help_open = 0;
     tui_state.help_tab = 0;
@@ -123,8 +134,13 @@ int tui_init(void)
 void tui_run(void)
 {
     while (tui_state.running) {
-        render();
-        read_input();
+        tick_address_table();
+        if (render() != 0) {
+            tui_state.running = FALSE;
+            break;
+        }
+        ULONGLONG now = GetTickCount64();
+        read_input(tui_next_wait_timeout(now));
     }
 }
 
@@ -135,23 +151,23 @@ void tui_shutdown(void)
     ci.bVisible = TRUE;
     SetConsoleCursorInfo(tui_state.hOut, &ci);
 
-    DWORD mode;
-    GetConsoleMode(tui_state.hIn, &mode);
-    mode |= ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
-    SetConsoleMode(tui_state.hIn, mode);
-
-    if (tui_state.attached) {
-        if (tui_state.scanner_inited) {
-            scanner_session_destroy(&tui_state.scanner);
-            tui_state.scanner_inited = FALSE;
-        }
-        process_detach(&tui_state.target);
-        tui_state.attached = FALSE;
+    DWORD mode = 0;
+    if (GetConsoleMode(tui_state.hIn, &mode)) {
+        mode |= ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+        SetConsoleMode(tui_state.hIn, mode);
     }
+
+    tui_detach_target();
+
+    addr_table_destroy(&tui_state.address_table);
 
     if (tui_state.processes) {
         process_free_list(tui_state.processes);
         tui_state.processes = NULL;
+    }
+    if (tui_state.process_view) {
+        free(tui_state.process_view);
+        tui_state.process_view = NULL;
     }
 
     DWORD written;
@@ -243,7 +259,7 @@ static void draw_process_list(Screen *screen)
     int vis_rows = (tui_state.height - 3) - CONTENT_START;
     if (vis_rows <= 0) return;
 
-    int max_scroll = (int)tui_state.process_count - vis_rows;
+    int max_scroll = (int)tui_state.process_view_count - vis_rows;
     if (max_scroll < 0) max_scroll = 0;
     if (tui_state.process_scroll > max_scroll) tui_state.process_scroll = max_scroll;
     if (tui_state.process_scroll < 0) tui_state.process_scroll = 0;
@@ -252,9 +268,9 @@ static void draw_process_list(Screen *screen)
     for (int i = 0; i < vis_rows; i++) {
         int pi = tui_state.process_scroll + i;
         int row = CONTENT_START + i;
-        if ((unsigned int)pi >= tui_state.process_count) break;
+        if ((unsigned int)pi >= tui_state.process_view_count) break;
 
-        ProcessEntry *entry = &tui_state.processes[pi];
+        ProcessEntry *entry = &tui_state.processes[tui_state.process_view[pi]];
         swprintf_s(line, _countof(line), L"%5u  %s", entry->pid, entry->name);
         WORD attr;
         if (pi == tui_state.selected_process && tui_state.focus == FOCUS_MAIN) {
@@ -281,13 +297,21 @@ static void draw_main_panel(Screen *screen)
     int main_x = sb_end + 1;
 
     if (tui_state.panel == PANEL_PROCESSES) {
-        if (tui_state.process_count > 0) {
-            draw_process_list(screen);
-        } else {
+        if (tui_state.process_count == 0) {
             screen_text(screen, main_x, CONTENT_START, L"Loading process list...", s_attr_normal);
+        } else if (tui_state.process_view_count == 0) {
+            wchar_t hint[PROCESS_NAME_MAX + 48];
+            swprintf_s(hint, _countof(hint),
+                       L"No processes match \"%s\"  (Esc clears, F5 refreshes)",
+                       tui_state.process_filter);
+            screen_text(screen, main_x, CONTENT_START, hint, s_attr_normal);
+        } else {
+            draw_process_list(screen);
         }
     } else if (tui_state.panel == PANEL_SCANNER) {
         draw_scanner_panel(screen);
+    } else if (tui_state.panel == PANEL_ADDRTABLE) {
+        draw_address_table_panel(screen);
     } else {
         screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", s_attr_normal);
     }
@@ -309,8 +333,8 @@ static void draw_scanner_panel(Screen *screen)
 
     const wchar_t *enc = s->param.type == SCAN_TYPE_STRING
         ? (tui_state.string_enc == 1 ? L"utf16" : L"ascii") : L"-";
-    swprintf_s(line, _countof(line), L"Scanner -- type: %s  mode: %s  enc: %s",
-               tui_scan_type_name(s->param.type), tui_scan_mode_name(s->mode), enc);
+    swprintf_s(line, _countof(line), L"Scanner -- type: %s  exact  enc: %s",
+               tui_scan_type_name(s->param.type), enc);
     screen_text(screen, main_x, row++, line, s_attr_normal);
 
     /* Hex byte dump of the current param (works for every type). */
@@ -318,30 +342,56 @@ static void draw_scanner_panel(Screen *screen)
     int pos = swprintf_s(hex, _countof(hex), L"value(hex): ");
     unsigned short shown = s->param.width > 16 ? 16 : s->param.width;
     for (unsigned short i = 0; i < shown && pos + 4 < (int)_countof(hex); i++) {
-        if (s->param.wild[i]) {
-            pos += swprintf_s(hex + pos, _countof(hex) - pos, L"?? ");
-        } else {
-            pos += swprintf_s(hex + pos, _countof(hex) - pos, L"%02X ", s->param.bytes[i]);
-        }
+        pos += swprintf_s(hex + pos, _countof(hex) - pos, L"%02X ", s->param.bytes[i]);
     }
     if (s->param.width > 16) {
         pos += swprintf_s(hex + pos, _countof(hex) - pos, L"...");
     }
-    swprintf_s(line, _countof(line), L"%s  results: %llu", hex, (unsigned long long)s->results.count);
-    screen_text(screen, main_x, row++, line, s_attr_normal);
+    if (s->results.skipped_regions > 0) {
+        swprintf_s(line, _countof(line), L"%s  results: %llu  skipped: %llu", hex,
+                   (unsigned long long)s->results.count,
+                   (unsigned long long)s->results.skipped_regions);
+        screen_text(screen, main_x, row++, line, s_attr_error);
+    } else {
+        swprintf_s(line, _countof(line), L"%s  results: %llu", hex,
+                   (unsigned long long)s->results.count);
+        screen_text(screen, main_x, row++, line, s_attr_normal);
+    }
 
     row++;  /* blank separator */
 
     if (!s->has_results) {
         screen_text(screen, main_x, row, L"Run `scan <value>` to find (use `type <name>` to pick type)", s_attr_normal);
+    } else if (s->results.count == 0 && s->results.skipped_regions > 0) {
+        screen_text(screen, main_x, row, L"No hits in readable regions -- some regions were skipped", s_attr_error);
     } else if (s->results.count == 0) {
         screen_text(screen, main_x, row, L"No survivors -- try a different value or run `scan` again", s_attr_error);
     } else {
+        if ((size_t)tui_state.scanner_selected_index >= s->results.count) {
+            tui_state.scanner_selected_index = s->results.count > 0 ? (int)(s->results.count - 1) : 0;
+        }
+
+        int vis_rows = (tui_state.height - 3) - CONTENT_START - 2;
+        if (vis_rows <= 0) vis_rows = 1;
+        if (vis_rows > (int)SCANNER_LIST_ROWS) vis_rows = (int)SCANNER_LIST_ROWS;
+
+        int scroll = 0;
+        int max_scroll = (int)s->results.count - vis_rows;
+        if (max_scroll < 0) max_scroll = 0;
+        if (tui_state.scanner_selected_index >= scroll + vis_rows) {
+            scroll = tui_state.scanner_selected_index - vis_rows + 1;
+            if (scroll > max_scroll) scroll = max_scroll;
+        } else if (tui_state.scanner_selected_index < scroll) {
+            scroll = tui_state.scanner_selected_index;
+        }
+
         wchar_t addrs[160];
         unsigned short w = s->results.value_width;
         unsigned short shown_w = w > 16 ? 16 : w;
-        for (size_t i = 0; i < s->results.count && i < SCANNER_LIST_ROWS; i++) {
+        for (size_t i = (size_t)scroll; i < s->results.count && (int)i - scroll < vis_rows; i++) {
             const unsigned char *val = s->results.values + i * w;
+            int is_sel = ((int)i == tui_state.scanner_selected_index && tui_state.focus == FOCUS_MAIN);
+            WORD attr = is_sel ? s_attr_sel : s_attr_normal;
             int p = swprintf_s(addrs, _countof(addrs), L"  0x%016llX  ", s->results.addresses[i]);
             for (unsigned short k = 0; k < shown_w && p + 4 < (int)_countof(addrs); k++) {
                 p += swprintf_s(addrs + p, _countof(addrs) - p, L"%02X ", val[k]);
@@ -349,19 +399,98 @@ static void draw_scanner_panel(Screen *screen)
             if (w > 16) {
                 p += swprintf_s(addrs + p, _countof(addrs) - p, L"...");
             }
-            screen_text(screen, main_x, row++, addrs, s_attr_normal);
+            screen_text(screen, main_x, row++, addrs, attr);
         }
-        if (s->results.count > SCANNER_LIST_ROWS) {
-            swprintf_s(addrs, _countof(addrs), L"  ... (%llu more)",
-                       (unsigned long long)(s->results.count - SCANNER_LIST_ROWS));
-            screen_text(screen, main_x, row++, addrs, s_attr_border);
+        if (s->results.count > (size_t)vis_rows) {
+            if ((int)s->results.count - scroll > vis_rows) {
+                swprintf_s(addrs, _countof(addrs), L"  ... (%llu more)",
+                           (unsigned long long)(s->results.count - (size_t)scroll - (size_t)vis_rows));
+                screen_text(screen, main_x, row++, addrs, s_attr_border);
+            }
         }
     }
 
     int help_row = tui_state.height - 4;
     if (help_row > row) {
         screen_text(screen, main_x, help_row,
-                    L"cmds: type <name>  scan <v>  next <v>  strenc ascii|utf16  ? help",
+                    L"Up/Dn select  a addentry  ? help   type <name>  scan <v>  next <v>",
+                    s_attr_border);
+    }
+}
+
+static void draw_address_table_panel(Screen *screen)
+{
+    int sb_end = 1 + SIDEBAR_WIDTH;
+    int main_x = sb_end + 1;
+    int main_w = tui_state.width - main_x - 1;
+    if (main_w < 10) return;
+
+    AddrTable *table = &tui_state.address_table;
+
+    if (!tui_state.attached && table->count == 0) {
+        screen_text(screen, main_x, CONTENT_START, L"Attach to a process first to add addresses", s_attr_normal);
+    } else if (tui_state.attached && table->count == 0) {
+        screen_text(screen, main_x, CONTENT_START,
+                    L"No saved addresses -- use `addentry <addr> <type> <label>`,", s_attr_normal);
+        screen_text(screen, main_x, CONTENT_START + 1,
+                    L"or press `a` on a scanner hit to promote it.", s_attr_normal);
+    }
+
+    int vis_rows = (tui_state.height - 3) - CONTENT_START;
+    if (vis_rows <= 0) return;
+
+    int max_scroll = (int)table->count - vis_rows;
+    if (max_scroll < 0) max_scroll = 0;
+    if (tui_state.address_table_scroll > max_scroll) tui_state.address_table_scroll = max_scroll;
+    if (tui_state.address_table_scroll < 0) tui_state.address_table_scroll = 0;
+
+    for (int i = 0; i < vis_rows; i++) {
+        int ei = tui_state.address_table_scroll + i;
+        int row = CONTENT_START + i;
+        if ((size_t)ei >= table->count) break;
+
+        const AddrEntry *entry = &table->entries[ei];
+        int is_sel = (ei == tui_state.address_table_selected && tui_state.focus == FOCUS_MAIN);
+        WORD attr = is_sel ? s_attr_sel : s_attr_normal;
+
+        const wchar_t *lock_char = entry->locked ? L"L" : L" ";
+        const wchar_t *value_str = L"?";
+
+        wchar_t val_buf[64];
+        if (!entry->value_valid) {
+            if (!tui_state.attached) {
+                value_str = L"no process";
+            } else if (entry->value_width == 0) {
+                value_str = L"var";
+            } else {
+                value_str = L"err";
+            }
+        } else {
+            int pos = 0;
+            for (unsigned short k = 0; k < entry->value_width && pos < 45; k++) {
+                pos += swprintf_s(val_buf + pos, _countof(val_buf) - pos,
+                                  L"%02X ", entry->current_value[k]);
+            }
+            value_str = val_buf;
+        }
+
+        wchar_t line[256];
+        const wchar_t *type_name = tui_scan_type_name(entry->type);
+        swprintf_s(line, _countof(line), L" [%s] %-20S  %-6s  0x%llX  %s",
+                   lock_char, entry->label, type_name,
+                   (unsigned long long)entry->address, value_str);
+
+        screen_text(screen, main_x, row, line, attr);
+        int used = (int)wcslen(line);
+        for (int x = main_x + used; x < tui_state.width - 1; x++) {
+            screen_put(screen, x, row, L' ', attr);
+        }
+    }
+
+    int help_row = tui_state.height - 4;
+    if (help_row > CONTENT_START) {
+        screen_text(screen, main_x, help_row,
+                    L"d del   l lock   u unlock   e label   r read   w write   ? help",
                     s_attr_border);
     }
 }
@@ -547,12 +676,21 @@ static void draw_help(Screen *screen)
                 L"<-/->  Tab page    Up/Dn scroll    1-4 jump    Esc close", s_attr_border);
 }
 
-static void render(void)
+static int render(void)
 {
     Screen screen;
-    if (screen_alloc(&screen, tui_state.width, tui_state.height) != 0) return;
+    if (screen_alloc(&screen, tui_state.width, tui_state.height) != 0) {
+        tui_set_status(L"Screen allocation failed", TRUE);
+        return -1;
+    }
 
     screen_clear(&screen, s_attr_normal);
+    if (tui_state.width < MIN_LAYOUT_WIDTH || tui_state.height < MIN_LAYOUT_HEIGHT) {
+        screen_text(&screen, 0, 0, L"Resize console to at least 40 x 10", s_attr_error);
+        int present_result = screen_present(&screen, tui_state.hOut);
+        screen_free(&screen);
+        return present_result;
+    }
     draw_borders(&screen);
     draw_sep_row(&screen, SEP1_ROW, TRUE);
     draw_sep_row(&screen, tui_state.height - 3, FALSE);
@@ -561,8 +699,10 @@ static void render(void)
     draw_main_panel(&screen);
     draw_command(&screen);
 
-    screen_present(&screen, tui_state.hOut);
+    int present_result = screen_present(&screen, tui_state.hOut);
     screen_free(&screen);
+    if (present_result != 0) tui_set_status(L"Console output failed", TRUE);
+    return present_result;
 }
 
 /* ---- Static helpers: input ---- */
@@ -616,27 +756,148 @@ static void handle_key(WORD vk, WCHAR ch)
 
     case FOCUS_MAIN:
         if (tui_state.panel == PANEL_PROCESSES) {
-            if (vk == VK_UP && tui_state.selected_process > 0) {
+            if (ch == L'?') {
+                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+                if (book) {
+                    tui_state.help_book = book;
+                    tui_state.help_open = 1;
+                    tui_state.help_tab = 0;
+                    tui_state.help_scroll = 0;
+                }
+            } else if (ch == L'/') {
+                /* Jump to the command bar pre-filled with `search ` so the
+                   user can type a substring and Enter to filter the list. */
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"search ");
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (vk == VK_UP && tui_state.selected_process > 0) {
                 tui_state.selected_process--;
                 if (tui_state.selected_process < tui_state.process_scroll) tui_state.process_scroll = tui_state.selected_process;
-            } else if (vk == VK_DOWN && (unsigned int)tui_state.selected_process + 1 < tui_state.process_count) {
+            } else if (vk == VK_DOWN && (unsigned int)tui_state.selected_process + 1 < tui_state.process_view_count) {
                 tui_state.selected_process++;
                 int vis_rows = (tui_state.height - 3) - CONTENT_START;
                 if (tui_state.selected_process >= tui_state.process_scroll + vis_rows) tui_state.process_scroll = tui_state.selected_process - vis_rows + 1;
             } else if (vk == VK_RETURN) {
                 tui_attach_to_selected();
             } else if (vk == VK_F5) {
-                tui_refresh_process_list();
-                tui_set_status(L"Process list refreshed", FALSE);
+                if (tui_refresh_process_list()) tui_set_status(L"Process list refreshed", FALSE);
+            } else if (vk == VK_ESCAPE && tui_process_filter_active()) {
+                /* Esc on a filtered list clears the filter instead of bouncing
+                   back to the sidebar -- one keystroke to widen the view. */
+                tui_clear_process_filter();
+                return;
             }
         }
-        if (tui_state.panel == PANEL_SCANNER && ch == L'?') {
-            const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
-            if (book) {
-                tui_state.help_book = book;
-                tui_state.help_open = 1;
-                tui_state.help_tab = 0;
-                tui_state.help_scroll = 0;
+        if (tui_state.panel == PANEL_SCANNER) {
+            if (ch == L'?') {
+                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+                if (book) {
+                    tui_state.help_book = book;
+                    tui_state.help_open = 1;
+                    tui_state.help_tab = 0;
+                    tui_state.help_scroll = 0;
+                }
+            } else if (vk == VK_UP && tui_state.scanner_selected_index > 0) {
+                tui_state.scanner_selected_index--;
+            } else if (vk == VK_DOWN && tui_state.scanner.has_results &&
+                       (size_t)tui_state.scanner_selected_index + 1 < tui_state.scanner.results.count) {
+                tui_state.scanner_selected_index++;
+            } else if (ch == L'a' && tui_state.scanner.has_results &&
+                       (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
+                /* add hit label prompt: focus command bar with "label <name>" */
+                unsigned long long addr = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
+                wchar_t prompt[32];
+                swprintf_s(prompt, _countof(prompt), L"0x%llX", addr);
+                tui_set_status(prompt, FALSE);
+                /* Signal to command handler that next command is addentry from scan */
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"addentry %llX %s ",
+                           addr, tui_scan_type_name(tui_state.scanner.param.type));
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'r' && tui_state.scanner.has_results &&
+                       (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
+                unsigned long long addr = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"read %llX ", addr);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'w' && tui_state.scanner.has_results &&
+                       (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
+                unsigned long long addr = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"write %llX ", addr);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            }
+        }
+        if (tui_state.panel == PANEL_ADDRTABLE) {
+            size_t count = tui_state.address_table.count;
+            if (vk == VK_UP && tui_state.address_table_selected > 0) {
+                tui_state.address_table_selected--;
+                if (tui_state.address_table_selected < tui_state.address_table_scroll)
+                    tui_state.address_table_scroll = tui_state.address_table_selected;
+            } else if (vk == VK_DOWN && tui_state.address_table_selected + 1 < (int)count) {
+                tui_state.address_table_selected++;
+                int vis_rows = (tui_state.height - 3) - CONTENT_START;
+                if (tui_state.address_table_selected >= tui_state.address_table_scroll + vis_rows)
+                    tui_state.address_table_scroll = tui_state.address_table_selected - vis_rows + 1;
+            } else if (ch == L'd' && count > 0) {
+                addr_table_remove(&tui_state.address_table, (size_t)tui_state.address_table_selected);
+                if (tui_state.address_table_selected >= (int)count - 1 && tui_state.address_table_selected > 0)
+                    tui_state.address_table_selected--;
+                tui_set_status(L"Entry removed", FALSE);
+            } else if (ch == L'u' && count > 0 && tui_state.address_table.entries[tui_state.address_table_selected].locked) {
+                addr_table_unlock(&tui_state.address_table, (size_t)tui_state.address_table_selected);
+                tui_set_status(L"Unlocked", FALSE);
+            } else if (ch == L'l' && count > 0 && !tui_state.address_table.entries[tui_state.address_table_selected].locked) {
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"lockentry %d ",
+                           tui_state.address_table_selected);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'e' && count > 0) {
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"entrylabel %d ",
+                           tui_state.address_table_selected);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'r' && count > 0) {
+                /* Read the selected entry's address -- opens the command bar
+                   pre-filled with `read <addr> `; type the byte count (1-128)
+                   and Enter. Mirrors the `r` shortcut on the Scanner panel so
+                   the same muscle memory works on either page. */
+                unsigned long long addr = tui_state.address_table.entries[tui_state.address_table_selected].address;
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"read %llX ", addr);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'w' && count > 0) {
+                /* Write to the selected entry's address -- opens the command
+                   bar pre-filled with `write <addr> `; type hex byte pairs and
+                   Enter. Same contract as the Scanner `w` shortcut. */
+                unsigned long long addr = tui_state.address_table.entries[tui_state.address_table_selected].address;
+                tui_state.cmd_buf[0] = L'\0';
+                tui_state.cmd_len = 0;
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"write %llX ", addr);
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'?') {
+                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+                if (book) {
+                    tui_state.help_book = book;
+                    tui_state.help_open = 1;
+                    tui_state.help_tab = 0;
+                    tui_state.help_scroll = 0;
+                }
             }
         }
         if (vk == VK_ESCAPE) {
@@ -664,16 +925,68 @@ static void handle_key(WORD vk, WCHAR ch)
     }
 }
 
-static void read_input(void)
+static void read_input(DWORD timeout)
 {
     INPUT_RECORD records[INPUT_RECORD_BATCH];
     DWORD count = 0;
-    if (!ReadConsoleInputW(tui_state.hIn, records, INPUT_RECORD_BATCH, &count)) return;
+    DWORD wait = WaitForSingleObject(tui_state.hIn, timeout);
+    if (wait == WAIT_TIMEOUT) return;
+    if (wait != WAIT_OBJECT_0 || !ReadConsoleInputW(tui_state.hIn, records, INPUT_RECORD_BATCH, &count)) {
+        tui_set_status(L"Console input failed", TRUE);
+        tui_state.running = FALSE;
+        return;
+    }
 
     for (DWORD i = 0; i < count; i++) {
+        if (records[i].EventType == WINDOW_BUFFER_SIZE_EVENT) {
+            if (!update_console_size()) tui_state.running = FALSE;
+            continue;
+        }
         if (records[i].EventType != KEY_EVENT) continue;
         if (!records[i].Event.KeyEvent.bKeyDown) continue;
         handle_key(records[i].Event.KeyEvent.wVirtualKeyCode,
                    records[i].Event.KeyEvent.uChar.UnicodeChar);
     }
+}
+
+static void tick_address_table(void)
+{
+    if (!tui_state.attached) return;
+    ULONGLONG now = GetTickCount64();
+    if (now - tui_state.address_table_last_refresh >= ADDR_TABLE_REFRESH_INTERVAL_MS) {
+        int alive = 0;
+        PlatformError alive_error = process_is_alive(&tui_state.target, &alive);
+        if (alive_error != PLATFORM_OK || !alive) {
+            tui_detach_target();
+            tui_set_status(L"Target process exited -- locks disabled", TRUE);
+            return;
+        }
+        addr_table_refresh(&tui_state.address_table);
+        tui_state.address_table_last_refresh = now;
+    }
+    if (now - tui_state.address_table_last_lock >= ADDR_TABLE_LOCK_INTERVAL_MS) {
+        bool had_error = false;
+        size_t error_index = 0;
+        addr_table_lock_write(&tui_state.address_table, &had_error, &error_index);
+        tui_state.address_table_last_lock = now;
+        if (had_error && error_index < tui_state.address_table.count) {
+            wchar_t msg[256];
+            const AddrEntry *entry = &tui_state.address_table.entries[error_index];
+            swprintf_s(msg, _countof(msg), L"Lock write failed on \"%S\" (0x%llX) -- entry unlocked",
+                       entry->label, (unsigned long long)entry->address);
+            tui_set_status(msg, TRUE);
+        }
+    }
+}
+
+static int update_console_size(void)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info = {0};
+    if (!GetConsoleScreenBufferInfo(tui_state.hOut, &info)) {
+        tui_set_status(L"Failed to read console size", TRUE);
+        return 0;
+    }
+    tui_state.width = info.srWindow.Right - info.srWindow.Left + 1;
+    tui_state.height = info.srWindow.Bottom - info.srWindow.Top + 1;
+    return tui_state.width > 0 && tui_state.height > 0;
 }

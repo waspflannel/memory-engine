@@ -16,6 +16,7 @@ typedef struct {
     unsigned char      *values;
     size_t              count;
     size_t              capacity;
+    size_t              skipped_regions;
     unsigned short      value_width;
 } ScanResults;
 
@@ -40,31 +41,27 @@ typedef enum {
     SCAN_TYPE_AOB,
 } ScanType;
 
-typedef enum {
-    SCAN_MODE_EXACT,            /* first or next: keep where value == param */
-} ScanMode;
-
 typedef struct {
     ScanType       type;
     unsigned short width;
     unsigned char  bytes[SCAN_VALUE_MAX];
-    unsigned char  wild[SCAN_VALUE_MAX];        /* 1 = wildcard, 0 = literal */
 } ScanValue;
 
 typedef struct {
     const Target *target;   /* borrowed, not owned */
-    ScanMode      mode;
     ScanValue     param;        /* value to search for */
     ScanResults   results;
+    ScanType      results_type;       /* valid only while has_results is set */
     int           has_results;        /* set after first scan; next scan requires it */
 } ScanSession;
 
 unsigned short scanner_type_width(ScanType type);     /* fixed width, or 0 for variable (string/AOB) */
+const char    *scanner_type_name(ScanType type);
+PlatformError  scanner_type_from_name(const char *name, ScanType *type);
 
-void scanner_value_set(ScanValue *value, ScanType type, const void *bytes, size_t len);
-void scanner_value_set_wildcard(ScanValue *value, const unsigned char *wild, size_t len);
+PlatformError scanner_value_set(ScanValue *value, ScanType type, const void *bytes, size_t len);
 
-void           scanner_session_init(ScanSession *session, const Target *target, ScanType type, ScanMode mode);
+void           scanner_session_init(ScanSession *session, const Target *target, ScanType type);
 void           scanner_session_destroy(ScanSession *session);
 
 PlatformError  scanner_first_scan(ScanSession *session);

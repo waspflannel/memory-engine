@@ -83,7 +83,8 @@ static void test_scanner_boundary(void)
     printf("--- scanner boundary validation ---\n");
     ScanResults results;
     results_init(&results);
-    check(results.count == 0, "results_init zeroes count");
+    check(results.count == 0 && results.skipped_regions == 0,
+          "results_init zeroes count and skipped-region diagnostics");
     results_free(&results);
 
     Target empty_target = {0};
@@ -98,11 +99,17 @@ static void test_scanner_boundary(void)
           "scanner_list_regions with NULL out-params fails");
 
     ScanSession session;
-    scanner_session_init(&session, &empty_target, SCAN_TYPE_I32, SCAN_MODE_EXACT);
+    scanner_session_init(&session, &empty_target, SCAN_TYPE_I32);
     check(scanner_first_scan(NULL) != PLATFORM_OK, "scanner_first_scan NULL session fails");
     check(scanner_first_scan(&session) != PLATFORM_OK, "scanner_first_scan with empty target fails");
     check(scanner_next_scan(&session) != PLATFORM_OK, "scanner_next_scan without prior first scan fails");
     scanner_session_destroy(&session);
+
+    ScanValue value = {0};
+    unsigned char short_value[1] = {0};
+    check(scanner_value_set(&value, SCAN_TYPE_I32, short_value, sizeof(short_value)) == PLATFORM_ERR_INVALID_PARAM &&
+          value.width == 0,
+          "fixed-width scanner value rejects a short buffer");
 
     results_init(NULL);  /* must not crash on NULL */
     results_free(NULL);  /* must not crash on NULL */
