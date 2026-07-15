@@ -18,6 +18,7 @@ add_executable(memforge
     tui/help_books/address_table.c
     core/process/process.c
     core/memory/memory.c
+    core/hexview/hexview.c
     core/scanner/scanner.c
     core/address_table/address_table.c
     platform/platform.c
@@ -42,6 +43,17 @@ add_executable(core_tests
 target_compile_options(core_tests PRIVATE /W4 /WX)
 target_include_directories(core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(core_tests PRIVATE psapi)
+
+add_executable(hexview_tests
+    test/hexview_tests.c
+    core/hexview/hexview.c
+    core/memory/memory.c
+    core/process/process.c
+    platform/platform.c
+)
+target_compile_options(hexview_tests PRIVATE /W4 /WX)
+target_include_directories(hexview_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(hexview_tests PRIVATE psapi)
 
 add_executable(scanner_tests
     test/scanner_tests.c
@@ -87,6 +99,7 @@ target_link_libraries(tui_command_tests PRIVATE psapi)
 
 enable_testing()
 add_test(NAME core_tests COMMAND core_tests)
+add_test(NAME hexview_tests COMMAND hexview_tests)
 # scanner_tests spawns test_target.exe as its child; run it next to the built
 # exes so the relative path resolves under a multi-config generator's Release
 # subdir.
