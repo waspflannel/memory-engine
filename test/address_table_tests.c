@@ -4,6 +4,9 @@
 #include <string.h>
 #include "core/address_table/address_table.h"
 
+#define TEMP_PATH_MAX MAX_PATH
+#define FIXTURE_PATH_MAX (MAX_PATH + 64)
+
 static int failures;
 static volatile int watched_value = 10;
 
@@ -86,8 +89,19 @@ static void test_crud_and_target_lifecycle(Target *target)
 static void test_persistence(Target *target)
 {
     printf("--- strict transactional persistence ---\n");
-    const wchar_t *valid_path = L"address-table-\x03A9-valid.mft";
-    const wchar_t *invalid_path = L"address-table-invalid.mft";
+    wchar_t temp_path[TEMP_PATH_MAX];
+    wchar_t valid_path[FIXTURE_PATH_MAX];
+    wchar_t invalid_path[FIXTURE_PATH_MAX];
+    DWORD temp_length = GetTempPathW(TEMP_PATH_MAX, temp_path);
+    if (temp_length == 0 || temp_length >= TEMP_PATH_MAX ||
+        swprintf_s(valid_path, FIXTURE_PATH_MAX, L"%saddress-table-%lu-\x03A9-valid.mft",
+                   temp_path, (unsigned long)GetCurrentProcessId()) < 0 ||
+        swprintf_s(invalid_path, FIXTURE_PATH_MAX, L"%saddress-table-%lu-invalid.mft",
+                   temp_path, (unsigned long)GetCurrentProcessId()) < 0) {
+        check(0, "create unique persistence fixture paths");
+        return;
+    }
+
     AddrTable table;
     check(addr_table_init(&table, target), "persistence table initializes");
     check(addr_table_add(&table, "sentinel", SCAN_TYPE_I32, (uintptr_t)&watched_value) == 0,

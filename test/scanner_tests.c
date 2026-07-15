@@ -370,6 +370,46 @@ int main(void)
             }
             VirtualFree(split_memory, 0, MEM_RELEASE);
         }
+
+        int *candidate = (int *)VirtualAlloc(NULL, page_size * 2,
+            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        check(candidate != NULL, "allocate controlled next-scan candidates");
+        if (candidate) {
+            memset(candidate, 0, page_size * 2);
+            int *surviving_candidate = (int *)((unsigned char *)candidate + page_size);
+            *candidate = 0x13579BDF;
+            *surviving_candidate = *candidate;
+            ScanSession session;
+            scanner_session_init(&session, &self, SCAN_TYPE_I32);
+            scanner_value_set(&session.param, SCAN_TYPE_I32, candidate, sizeof(*candidate));
+            ScanRegion region = {
+                (unsigned long long)(UINT_PTR)candidate,
+                page_size * 2,
+            };
+            check(scanner_find_hits(&session, &region, 1, &session.results) == PLATFORM_OK &&
+                  session.results.count == 2,
+                  "create two controlled next-scan hits");
+            session.results_type = SCAN_TYPE_I32;
+            session.has_results = 1;
+
+            DWORD old_protect = 0;
+            BOOL made_inaccessible = VirtualProtect(candidate, page_size, PAGE_NOACCESS, &old_protect);
+            check(made_inaccessible != 0, "make a next-scan candidate inaccessible");
+            if (made_inaccessible) {
+                check(scanner_next_scan(&session) == PLATFORM_OK,
+                      "live unreadable candidate does not abort next scan");
+                check(session.results.count == 1 && session.results.unreadable_candidates == 1,
+                      "live unreadable candidate is removed and counted while scanning continues");
+                check(session.results.count == 1 &&
+                      session.results.addresses[0] == (unsigned long long)(UINT_PTR)surviving_candidate,
+                      "readable candidate after an unreadable hit still survives");
+                check(scanner_next_scan(&session) == PLATFORM_OK &&
+                      session.results.count == 1 && session.results.unreadable_candidates == 0,
+                      "next-scan unreadable count describes only the latest scan");
+            }
+            scanner_session_destroy(&session);
+            VirtualFree(candidate, 0, MEM_RELEASE);
+        }
     }
 
     printf("--- T9: target exit is loud and scan state stays atomic ---\n");

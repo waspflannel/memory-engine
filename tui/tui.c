@@ -348,10 +348,15 @@ static void draw_scanner_panel(Screen *screen)
         pos += swprintf_s(hex + pos, _countof(hex) - pos, L"...");
     }
     if (s->results.skipped_regions > 0) {
-        swprintf_s(line, _countof(line), L"%s  results: %llu  skipped: %llu", hex,
+        swprintf_s(line, _countof(line), L"%s  results: %llu  ignored regions: %llu", hex,
                    (unsigned long long)s->results.count,
                    (unsigned long long)s->results.skipped_regions);
-        screen_text(screen, main_x, row++, line, s_attr_error);
+        screen_text(screen, main_x, row++, line, s_attr_normal);
+    } else if (s->results.unreadable_candidates > 0) {
+        swprintf_s(line, _countof(line), L"%s  results: %llu  unreadable removed: %llu", hex,
+                   (unsigned long long)s->results.count,
+                   (unsigned long long)s->results.unreadable_candidates);
+        screen_text(screen, main_x, row++, line, s_attr_normal);
     } else {
         swprintf_s(line, _countof(line), L"%s  results: %llu", hex,
                    (unsigned long long)s->results.count);
@@ -363,7 +368,9 @@ static void draw_scanner_panel(Screen *screen)
     if (!s->has_results) {
         screen_text(screen, main_x, row, L"Run `scan <value>` to find (use `type <name>` to pick type)", s_attr_normal);
     } else if (s->results.count == 0 && s->results.skipped_regions > 0) {
-        screen_text(screen, main_x, row, L"No hits in readable regions -- some regions were skipped", s_attr_error);
+        screen_text(screen, main_x, row, L"No hits; volatile regions were ignored", s_attr_normal);
+    } else if (s->results.count == 0 && s->results.unreadable_candidates > 0) {
+        screen_text(screen, main_x, row, L"No survivors; unreadable candidates were removed", s_attr_normal);
     } else if (s->results.count == 0) {
         screen_text(screen, main_x, row, L"No survivors -- try a different value or run `scan` again", s_attr_error);
     } else {
