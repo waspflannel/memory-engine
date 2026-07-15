@@ -52,6 +52,8 @@ static int  worker_fn(void *arg);
 static PlatformError merge_worker_results(ScanWork *works, int n, unsigned short width, ScanResults *out);
 static const ScanTypeInfo *find_type(ScanType type);
 static int grow_results(ScanResults *results, size_t capacity);
+static PlatformError classify_read_failure(const ScanSession *session, PlatformError read_error,
+                                           int *can_ignore);
 
 /* ---- Public API (order matches scanner.h) ---- */
 
@@ -63,6 +65,7 @@ void results_init(ScanResults *results)
     results->count        = 0;
     results->capacity     = 0;
     results->skipped_regions = 0;
+    results->unreadable_candidates = 0;
     results->value_width  = 0;
 }
 
@@ -76,6 +79,7 @@ void results_free(ScanResults *results)
     results->count      = 0;
     results->capacity   = 0;
     results->skipped_regions = 0;
+    results->unreadable_candidates = 0;
     results->value_width = 0;
 }
 
@@ -279,8 +283,16 @@ PlatformError scanner_next_scan(ScanSession *session)
         unsigned long long addr = previous->addresses[i];
         PlatformError rd = memory_read(session->target, addr, cur, W);
         if (rd != PLATFORM_OK) {
-            results_free(&survivors);
-            return rd;
+            int can_ignore = 0;
+            PlatformError failure = classify_read_failure(session, rd, &can_ignore);
+            if (failure != PLATFORM_OK) {
+                results_free(&survivors);
+                return failure;
+            }
+            if (can_ignore) {
+                survivors.unreadable_candidates++;
+                continue;
+            }
         }
         if (value_equals(cur, &session->param)) {
             if (!append_hit(&survivors, addr, cur, W)) {
@@ -421,16 +433,11 @@ static PlatformError match_regions(const ScanSession *session, const ScanRegion 
             size_t take = remaining < SCAN_CHUNK_BYTES ? remaining : SCAN_CHUNK_BYTES;
             PlatformError rd = memory_read(session->target, addr, buf, take);
             if (rd != PLATFORM_OK) {
-                if (rd == PLATFORM_ERR_READ_FAILED || rd == PLATFORM_ERR_PARTIAL_READ) {
-                    int alive = 0;
-                    PlatformError alive_error = process_is_alive(session->target, &alive);
-                    if (alive_error == PLATFORM_OK && alive) {
-                        out->skipped_regions++;
-                        break;
-                    }
-                    result = alive_error != PLATFORM_OK ? alive_error : rd;
-                } else {
-                    result = rd;
+                int can_ignore = 0;
+                result = classify_read_failure(session, rd, &can_ignore);
+                if (result == PLATFORM_OK && can_ignore) {
+                    out->skipped_regions++;
+                    break;
                 }
                 goto done;
             }
@@ -546,4 +553,25 @@ static int grow_results(ScanResults *results, size_t capacity)
     results->values = values;
     results->capacity = capacity;
     return 1;
+}
+
+static PlatformError classify_read_failure(const ScanSession *session, PlatformError read_error,
+                                           int *can_ignore)
+{
+    *can_ignore = 0;
+    if (read_error != PLATFORM_ERR_READ_FAILED && read_error != PLATFORM_ERR_PARTIAL_READ) {
+        return read_error;
+    }
+
+    int alive = 0;
+    PlatformError alive_error = process_is_alive(session->target, &alive);
+    if (alive_error != PLATFORM_OK) {
+        return alive_error;
+    }
+    if (!alive) {
+        return read_error;
+    }
+
+    *can_ignore = 1;
+    return PLATFORM_OK;
 }
