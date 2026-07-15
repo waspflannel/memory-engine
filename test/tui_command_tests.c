@@ -41,6 +41,13 @@ int main(void)
     tui_state.address_table_last_lock = 1000;
     check(tui_next_wait_timeout(1025) == 25,
           "attached TUI waits until the nearest lock deadline");
+    tui_state.panel = PANEL_HEXVIEW;
+    tui_state.address_table_last_refresh = 2000;
+    tui_state.address_table_last_lock = 2000;
+    tui_state.hexview_last_refresh = 1000;
+    check(tui_next_wait_timeout(1100) == 100,
+          "Hex View keeps the idle loop awake for its visible-window refresh");
+    tui_state.panel = PANEL_PROCESSES;
 
     volatile int watched = 10;
     check(addr_table_add(&tui_state.address_table, "watched", SCAN_TYPE_I32,
@@ -80,6 +87,17 @@ int main(void)
 
     run_command(L"read 1234 129");
     check(tui_state.status_error, "read rejects counts larger than the display contract");
+
+    run_command(L"hex 0");
+    check(tui_state.panel == PANEL_HEXVIEW && tui_state.hexview_address == 0,
+          "hex command opens the Hex View at address zero");
+    run_command(L"hex 100junk");
+    check(tui_state.status_error, "hex command rejects a trailing address suffix");
+
+    tui_state.attached = FALSE;
+    run_command(L"hex 1234");
+    check(tui_state.status_error, "hex command requires an attached process");
+    tui_state.attached = TRUE;
 
     ScanValue value = {0};
     value.type = SCAN_TYPE_U32;

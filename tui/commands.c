@@ -27,6 +27,7 @@
 #define CMD_UNLOCKENTRY_PREFIX 12 /* length of L"unlockentry " */
 #define CMD_SAVEENTRY_PREFIX 10 /* length of L"saveentry "  */
 #define CMD_LOADENTRY_PREFIX 10 /* length of L"loadentry "  */
+#define CMD_HEX_PREFIX       4  /* length of L"hex "        */
 
 /* Forward declarations — definitions at bottom of file. */
 static void cmd_read(const wchar_t *args);
@@ -43,6 +44,7 @@ static void cmd_lockentry(const wchar_t *args);
 static void cmd_unlockentry(const wchar_t *args);
 static void cmd_saveentry(const wchar_t *args);
 static void cmd_loadentry(const wchar_t *args);
+static void cmd_hex(const wchar_t *args);
 static const wchar_t *skip_spaces(const wchar_t *text);
 static int parse_unsigned(const wchar_t *text, int base, unsigned long long maximum,
                           unsigned long long *value, const wchar_t **tail);
@@ -175,6 +177,12 @@ void tui_exec_command(void)
 
     if (wcsncmp(tui_state.cmd_buf, L"loadentry ", CMD_LOADENTRY_PREFIX) == 0) {
         cmd_loadentry(tui_state.cmd_buf + CMD_LOADENTRY_PREFIX);
+        tui_state.cmd_len = 0;
+        return;
+    }
+
+    if (wcsncmp(tui_state.cmd_buf, L"hex ", CMD_HEX_PREFIX) == 0) {
+        cmd_hex(tui_state.cmd_buf + CMD_HEX_PREFIX);
         tui_state.cmd_len = 0;
         return;
     }
@@ -600,6 +608,23 @@ static void cmd_loadentry(const wchar_t *args)
     swprintf_s(msg, _countof(msg), L"Loaded %llu entries from \"%s\"",
                (unsigned long long)tui_state.address_table.count, filepath);
     tui_set_status(msg, FALSE);
+}
+
+static void cmd_hex(const wchar_t *args)
+{
+    if (!tui_state.attached) {
+        tui_set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    unsigned long long address = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || !tail_is_empty(tail)) {
+        tui_set_status(L"usage: hex <hex_address>", TRUE);
+        return;
+    }
+
+    tui_hexview_jump(address);
 }
 
 static const wchar_t *skip_spaces(const wchar_t *text)

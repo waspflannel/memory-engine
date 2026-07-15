@@ -6,6 +6,7 @@ const HelpEntry tui_command_help_entries[TUI_COMMAND_HELP_COUNT] = {
     { L"search [name]", L"filter process image names case-insensitively; omit the name to clear the filter" },
     { L"read <addr> <n>", L"read 1-128 bytes from a hexadecimal address and show every byte in the status line" },
     { L"write <addr> <byte> [byte ...]", L"write one or more whitespace-separated hexadecimal byte pairs, for example `write 1234 90 90`" },
+    { L"hex <addr>", L"open the live Hex View at a hexadecimal address" },
     { L"scan <value>", L"start a fresh exact scan using the current scanner type" },
     { L"next <value>", L"re-read and retain existing results that exactly match the new value" },
     { L"type <name>", L"select i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|aob and clear prior results" },

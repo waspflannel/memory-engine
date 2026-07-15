@@ -14,6 +14,7 @@
 #include "core/process/process.h"
 #include "core/scanner/scanner.h"
 #include "core/address_table/address_table.h"
+#include "core/hexview/hexview.h"
 #include "tui/help.h"
 
 /* Sizes shared by the tui_state definition (tui.c) and the helpers that touch
@@ -22,6 +23,8 @@
 #define CMD_BUF_MAX        256
 #define STATUS_MSG_MAX     512
 #define MAX_STATUS_TICKS   3000
+#define HEXVIEW_WINDOW_MAX 256
+#define HEXVIEW_REFRESH_INTERVAL_MS 200
 
 enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
        PANEL_DISASM, PANEL_DEBUGGER, PANEL_SCRIPTS, PANEL_PROFILES,
@@ -61,6 +64,17 @@ typedef struct {
     ULONGLONG  address_table_last_lock;
     int        scanner_selected_index;
 
+    unsigned long long hexview_address;
+    size_t             hexview_cursor;
+    size_t             hexview_byte_count;
+    unsigned short     hexview_bytes_per_row;
+    unsigned char      hexview_bytes[HEXVIEW_WINDOW_MAX];
+    unsigned char      hexview_readable[HEXVIEW_WINDOW_MAX];
+    MemoryRegion       hexview_first_region;
+    ULONGLONG          hexview_last_refresh;
+    int                hexview_window_valid;
+    int                hexview_high_nibble;
+
     int             help_open;
     int             help_tab;
     int             help_scroll;
@@ -85,6 +99,7 @@ int            tui_refresh_process_list(void);
 void           tui_detach_target(void);
 int            tui_do_attach(DWORD pid);
 void           tui_attach_to_selected(void);
+void           tui_hexview_jump(unsigned long long address);
 const wchar_t *tui_scan_type_name(ScanType type);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
 

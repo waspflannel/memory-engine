@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 #include <wchar.h>
 
 #include "tui_internal.h"
@@ -91,6 +92,10 @@ DWORD tui_next_wait_timeout(ULONGLONG now)
     ULONGLONG refresh_due = tui_state.address_table_last_refresh + ADDR_TABLE_REFRESH_INTERVAL_MS;
     ULONGLONG lock_due = tui_state.address_table_last_lock + ADDR_TABLE_LOCK_INTERVAL_MS;
     ULONGLONG due = refresh_due < lock_due ? refresh_due : lock_due;
+    if (tui_state.panel == PANEL_HEXVIEW) {
+        ULONGLONG hexview_due = tui_state.hexview_last_refresh + HEXVIEW_REFRESH_INTERVAL_MS;
+        if (hexview_due < due) due = hexview_due;
+    }
     return now >= due ? 0 : (DWORD)(due - now);
 }
 
@@ -105,6 +110,11 @@ void tui_detach_target(void)
     tui_state.attached = FALSE;
     tui_state.address_table_last_refresh = 0;
     tui_state.address_table_last_lock = 0;
+    tui_state.hexview_byte_count = 0;
+    tui_state.hexview_window_valid = FALSE;
+    tui_state.hexview_last_refresh = 0;
+    tui_state.hexview_high_nibble = -1;
+    memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
 }
 
 int tui_do_attach(DWORD pid)
@@ -129,6 +139,13 @@ int tui_do_attach(DWORD pid)
     tui_state.address_table_last_refresh = 0;
     tui_state.address_table_last_lock = 0;
     tui_state.scanner_selected_index = 0;
+    tui_state.hexview_address = tui_state.target.base;
+    tui_state.hexview_cursor = 0;
+    tui_state.hexview_byte_count = 0;
+    tui_state.hexview_window_valid = FALSE;
+    tui_state.hexview_last_refresh = 0;
+    tui_state.hexview_high_nibble = -1;
+    memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
 
     wchar_t msg[PROCESS_NAME_MAX + 32];
     swprintf_s(msg, _countof(msg), L"Attached to %s (PID %u)", tui_state.target.name, pid);
@@ -143,6 +160,19 @@ void tui_attach_to_selected(void)
 
     unsigned int idx = tui_state.process_view[tui_state.selected_process];
     tui_do_attach(tui_state.processes[idx].pid);
+}
+
+void tui_hexview_jump(unsigned long long address)
+{
+    tui_state.hexview_address = address;
+    tui_state.hexview_cursor = 0;
+    tui_state.hexview_byte_count = 0;
+    tui_state.hexview_window_valid = FALSE;
+    tui_state.hexview_last_refresh = 0;
+    tui_state.hexview_high_nibble = -1;
+    memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
+    tui_state.panel = PANEL_HEXVIEW;
+    tui_state.sidebar_idx = PANEL_HEXVIEW;
 }
 
 const wchar_t *tui_scan_type_name(ScanType type)

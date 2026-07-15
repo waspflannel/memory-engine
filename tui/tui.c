@@ -2,7 +2,9 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 #include <wchar.h>
 
 #include "tui/render.h"
@@ -61,6 +63,7 @@ static void draw_sidebar(Screen *screen);
 static void draw_process_list(Screen *screen);
 static void draw_scanner_panel(Screen *screen);
 static void draw_address_table_panel(Screen *screen);
+static void draw_hexview_panel(Screen *screen);
 static void draw_main_panel(Screen *screen);
 static void draw_command(Screen *screen);
 static void draw_help(Screen *screen);
@@ -69,7 +72,11 @@ static int  render(void);
 static void handle_key(WORD vk, WCHAR ch);
 static void read_input(DWORD timeout);
 static void tick_address_table(void);
+static void tick_hexview(void);
 static int  update_console_size(void);
+static int  hex_digit_value(WCHAR ch);
+static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count);
+static void refresh_hexview_window(void);
 
 /* ---- Public API (order matches tui.h) ---- */
 
@@ -119,6 +126,13 @@ int tui_init(void)
     tui_state.address_table_last_refresh = 0;
     tui_state.address_table_last_lock = 0;
     tui_state.scanner_selected_index = 0;
+    tui_state.hexview_address = 0;
+    tui_state.hexview_cursor = 0;
+    tui_state.hexview_byte_count = 0;
+    tui_state.hexview_bytes_per_row = 0;
+    tui_state.hexview_last_refresh = 0;
+    tui_state.hexview_window_valid = FALSE;
+    tui_state.hexview_high_nibble = -1;
 
     tui_state.help_open = 0;
     tui_state.help_tab = 0;
@@ -135,6 +149,7 @@ void tui_run(void)
 {
     while (tui_state.running) {
         tick_address_table();
+        tick_hexview();
         if (render() != 0) {
             tui_state.running = FALSE;
             break;
@@ -312,6 +327,8 @@ static void draw_main_panel(Screen *screen)
         draw_scanner_panel(screen);
     } else if (tui_state.panel == PANEL_ADDRTABLE) {
         draw_address_table_panel(screen);
+    } else if (tui_state.panel == PANEL_HEXVIEW) {
+        draw_hexview_panel(screen);
     } else {
         screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", s_attr_normal);
     }
@@ -497,8 +514,81 @@ static void draw_address_table_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > CONTENT_START) {
         screen_text(screen, main_x, help_row,
-                    L"d del   l lock   u unlock   e label   r read   w write   ? help",
+                    L"d del  l lock  u unlock  e label  r read  w write  v hex  ? help",
                     s_attr_border);
+    }
+}
+
+static void draw_hexview_panel(Screen *screen)
+{
+    int main_x = 1 + SIDEBAR_WIDTH + 1;
+    int main_w = tui_state.width - main_x - 1;
+    if (main_w < 10) return;
+
+    if (!tui_state.attached) {
+        screen_text(screen, main_x, CONTENT_START,
+                    L"Attach to a process first, then use `hex <address>` to jump", s_attr_normal);
+        return;
+    }
+
+    if (!tui_state.hexview_window_valid) {
+        wchar_t line[96];
+        swprintf_s(line, _countof(line), L"Hex window unavailable at 0x%016llX",
+                   tui_state.hexview_address);
+        screen_text(screen, main_x, CONTENT_START, line, s_attr_error);
+        return;
+    }
+
+    wchar_t header[192];
+    swprintf_s(header, _countof(header), L"Hex View  0x%016llX  region: 0x%016llX + 0x%llX  protect: 0x%X",
+               tui_state.hexview_address, tui_state.hexview_first_region.base,
+               (unsigned long long)tui_state.hexview_first_region.size,
+               tui_state.hexview_first_region.protect);
+    screen_text(screen, main_x, CONTENT_START, header, s_attr_normal);
+    screen_text(screen, main_x, CONTENT_START + 1,
+                L"Address             Hex bytes                                      ASCII", s_attr_border);
+
+    int row = CONTENT_START + 2;
+    size_t rows = tui_state.hexview_byte_count / tui_state.hexview_bytes_per_row;
+    for (size_t line_index = 0; line_index < rows; line_index++) {
+        size_t first_byte = line_index * tui_state.hexview_bytes_per_row;
+        wchar_t address[24];
+        swprintf_s(address, _countof(address), L"0x%016llX", tui_state.hexview_address + first_byte);
+        screen_text(screen, main_x, row + (int)line_index, address, s_attr_normal);
+
+        int hex_x = main_x + 19;
+        int ascii_x = hex_x + tui_state.hexview_bytes_per_row * 3 + 1;
+        screen_put(screen, ascii_x, row + (int)line_index, L'|', s_attr_border);
+        for (unsigned short column = 0; column < tui_state.hexview_bytes_per_row; column++) {
+            size_t byte_index = first_byte + column;
+            int selected = tui_state.focus == FOCUS_MAIN && byte_index == tui_state.hexview_cursor;
+            WORD attr = selected ? s_attr_sel :
+                (tui_state.hexview_readable[byte_index] ? s_attr_normal : s_attr_error);
+            wchar_t cell[4];
+            if (selected && tui_state.hexview_high_nibble >= 0) {
+                swprintf_s(cell, _countof(cell), L"%X_", tui_state.hexview_high_nibble);
+            } else if (tui_state.hexview_readable[byte_index]) {
+                swprintf_s(cell, _countof(cell), L"%02X", tui_state.hexview_bytes[byte_index]);
+            } else {
+                swprintf_s(cell, _countof(cell), L"??");
+            }
+            screen_text(screen, hex_x + column * 3, row + (int)line_index, cell, attr);
+
+            wchar_t ascii = L'?';
+            if (tui_state.hexview_readable[byte_index]) {
+                unsigned char byte = tui_state.hexview_bytes[byte_index];
+                ascii = byte >= 32 && byte <= 126 ? (wchar_t)byte : L'.';
+            }
+            screen_put(screen, ascii_x + 1 + column, row + (int)line_index, ascii, attr);
+        }
+        screen_put(screen, ascii_x + 1 + tui_state.hexview_bytes_per_row,
+                   row + (int)line_index, L'|', s_attr_border);
+    }
+
+    int help_row = tui_state.height - 4;
+    if (help_row > row + (int)rows) {
+        screen_text(screen, main_x, help_row,
+                    L"Arrows move  PgUp/PgDn page  0-9/A-F edit  g jump  ? help", s_attr_border);
     }
 }
 
@@ -897,6 +987,8 @@ static void handle_key(WORD vk, WCHAR ch)
                 swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"write %llX ", addr);
                 tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
                 tui_state.focus = FOCUS_COMMAND;
+            } else if (ch == L'v' && count > 0) {
+                tui_hexview_jump(tui_state.address_table.entries[tui_state.address_table_selected].address);
             } else if (ch == L'?') {
                 const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
                 if (book) {
@@ -904,6 +996,86 @@ static void handle_key(WORD vk, WCHAR ch)
                     tui_state.help_open = 1;
                     tui_state.help_tab = 0;
                     tui_state.help_scroll = 0;
+                }
+            }
+        }
+        if (tui_state.panel == PANEL_HEXVIEW) {
+            if (ch == L'?') {
+                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+                if (book) {
+                    tui_state.help_book = book;
+                    tui_state.help_open = 1;
+                    tui_state.help_tab = 0;
+                    tui_state.help_scroll = 0;
+                }
+            } else if (ch == L'g' || ch == L'G') {
+                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"hex ");
+                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+                tui_state.focus = FOCUS_COMMAND;
+            } else if (vk == VK_LEFT) {
+                if (tui_state.hexview_cursor > 0) tui_state.hexview_cursor--;
+                else if (tui_state.hexview_address > 0) tui_state.hexview_address--;
+                tui_state.hexview_last_refresh = 0;
+                tui_state.hexview_high_nibble = -1;
+            } else if (vk == VK_RIGHT) {
+                if (tui_state.hexview_cursor + 1 < tui_state.hexview_byte_count) tui_state.hexview_cursor++;
+                else if (tui_state.hexview_address < ULLONG_MAX) tui_state.hexview_address++;
+                tui_state.hexview_last_refresh = 0;
+                tui_state.hexview_high_nibble = -1;
+            } else if (vk == VK_UP) {
+                size_t step = tui_state.hexview_bytes_per_row;
+                if (tui_state.hexview_cursor >= step) tui_state.hexview_cursor -= step;
+                else if (tui_state.hexview_address >= step) tui_state.hexview_address -= step;
+                else tui_state.hexview_address = 0;
+                tui_state.hexview_last_refresh = 0;
+                tui_state.hexview_high_nibble = -1;
+            } else if (vk == VK_DOWN) {
+                size_t step = tui_state.hexview_bytes_per_row;
+                if (tui_state.hexview_cursor + step < tui_state.hexview_byte_count) {
+                    tui_state.hexview_cursor += step;
+                } else if (tui_state.hexview_address <= ULLONG_MAX - step) {
+                    tui_state.hexview_address += step;
+                }
+                tui_state.hexview_last_refresh = 0;
+                tui_state.hexview_high_nibble = -1;
+            } else if (vk == VK_PRIOR) {
+                size_t step = tui_state.hexview_byte_count;
+                tui_state.hexview_address = tui_state.hexview_address >= step ?
+                    tui_state.hexview_address - step : 0;
+                tui_state.hexview_cursor = 0;
+                tui_state.hexview_last_refresh = 0;
+                tui_state.hexview_high_nibble = -1;
+            } else if (vk == VK_NEXT) {
+                size_t step = tui_state.hexview_byte_count;
+                if (tui_state.hexview_address <= ULLONG_MAX - step) {
+                    tui_state.hexview_address += step;
+                }
+                tui_state.hexview_cursor = 0;
+                tui_state.hexview_last_refresh = 0;
+                tui_state.hexview_high_nibble = -1;
+            } else if (hex_digit_value(ch) >= 0) {
+                int nibble = hex_digit_value(ch);
+                if (tui_state.hexview_cursor >= tui_state.hexview_byte_count ||
+                    !tui_state.hexview_readable[tui_state.hexview_cursor]) {
+                    tui_set_status(L"Cannot edit an unreadable byte", TRUE);
+                } else if (tui_state.hexview_high_nibble < 0) {
+                    tui_state.hexview_high_nibble = nibble;
+                    tui_set_status(L"Hex high nibble entered; enter the low nibble", FALSE);
+                } else {
+                    unsigned char byte = (unsigned char)((tui_state.hexview_high_nibble << 4) | nibble);
+                    unsigned long long address = tui_state.hexview_address + tui_state.hexview_cursor;
+                    PlatformError err = hexview_write(&tui_state.target, address, &byte, sizeof(byte));
+                    tui_state.hexview_high_nibble = -1;
+                    refresh_hexview_window();
+                    if (err != PLATFORM_OK) {
+                        wchar_t message[256];
+                        swprintf_s(message, _countof(message), L"Hex write failed: %S", process_error_string(err));
+                        tui_set_status(message, TRUE);
+                    } else {
+                        wchar_t message[128];
+                        swprintf_s(message, _countof(message), L"Wrote %02X to 0x%016llX", byte, address);
+                        tui_set_status(message, FALSE);
+                    }
                 }
             }
         }
@@ -984,6 +1156,68 @@ static void tick_address_table(void)
             tui_set_status(msg, TRUE);
         }
     }
+}
+
+static void tick_hexview(void)
+{
+    if (!tui_state.attached || tui_state.panel != PANEL_HEXVIEW) return;
+
+    unsigned short bytes_per_row = 0;
+    size_t byte_count = 0;
+    hexview_layout(&bytes_per_row, &byte_count);
+    if (bytes_per_row != tui_state.hexview_bytes_per_row || byte_count != tui_state.hexview_byte_count) {
+        tui_state.hexview_bytes_per_row = bytes_per_row;
+        tui_state.hexview_byte_count = byte_count;
+        if (tui_state.hexview_cursor >= byte_count) tui_state.hexview_cursor = byte_count - 1;
+        tui_state.hexview_last_refresh = 0;
+    }
+
+    ULONGLONG now = GetTickCount64();
+    if (now - tui_state.hexview_last_refresh < HEXVIEW_REFRESH_INTERVAL_MS &&
+        tui_state.hexview_window_valid) return;
+    refresh_hexview_window();
+    tui_state.hexview_last_refresh = now;
+}
+
+static int hex_digit_value(WCHAR ch)
+{
+    if (ch >= L'0' && ch <= L'9') return (int)(ch - L'0');
+    if (ch >= L'a' && ch <= L'f') return (int)(ch - L'a') + 10;
+    if (ch >= L'A' && ch <= L'F') return (int)(ch - L'A') + 10;
+    return -1;
+}
+
+static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count)
+{
+    int main_x = 1 + SIDEBAR_WIDTH + 1;
+    int main_w = tui_state.width - main_x - 1;
+    int columns = (main_w - 23) / 4;
+    if (columns < 1) columns = 1;
+    if (columns > 16) columns = 16;
+
+    int rows = tui_state.height - CONTENT_START - 6;
+    if (rows < 1) rows = 1;
+    size_t count = (size_t)columns * (size_t)rows;
+    if (count > HEXVIEW_WINDOW_MAX) count = HEXVIEW_WINDOW_MAX;
+    *bytes_per_row = (unsigned short)columns;
+    *byte_count = count - count % (size_t)columns;
+}
+
+static void refresh_hexview_window(void)
+{
+    memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
+    tui_state.hexview_window_valid = FALSE;
+    PlatformError err = hexview_read_window(&tui_state.target, tui_state.hexview_address,
+                                            tui_state.hexview_bytes, tui_state.hexview_readable,
+                                            tui_state.hexview_byte_count,
+                                            &tui_state.hexview_first_region);
+    if (err != PLATFORM_OK) {
+        wchar_t message[256];
+        swprintf_s(message, _countof(message), L"Hex view read failed: %S", process_error_string(err));
+        tui_set_status(message, TRUE);
+        return;
+    }
+    tui_state.hexview_window_valid = TRUE;
 }
 
 static int update_console_size(void)

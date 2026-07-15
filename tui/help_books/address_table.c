@@ -24,6 +24,7 @@ static const HelpEntry addr_keys_entries[] = {
     { L"e",         L"Rename the selected entry (opens the command bar pre-filled)" },
     { L"r",         L"Read the selected entry's address -- opens the command bar pre-filled with `read <addr> ` (type the byte count, 1-128, then Enter)" },
     { L"w",         L"Write to the selected entry's address -- opens the command bar pre-filled with `write <addr> ` (type hex byte pairs, then Enter)" },
+    { L"v",         L"Open the selected entry's address in Hex View" },
     { L"?",         L"Open this help book" },
     { L"Esc",       L"Return focus to the sidebar panel selector" },
     { L"Tab",       L"Cycle focus between sidebar, panel, and command bar" },

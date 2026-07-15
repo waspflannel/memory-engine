@@ -16,6 +16,7 @@ add_executable(memforge
     tui/help_books/processes.c
     tui/help_books/scanner.c
     tui/help_books/address_table.c
+    tui/help_books/hexview.c
     core/process/process.c
     core/memory/memory.c
     core/hexview/hexview.c
@@ -87,6 +88,7 @@ add_executable(tui_command_tests
     tui/help_books/processes.c
     tui/help_books/scanner.c
     tui/help_books/address_table.c
+    tui/help_books/hexview.c
     core/address_table/address_table.c
     core/scanner/scanner.c
     core/memory/memory.c
