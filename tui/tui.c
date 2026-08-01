@@ -827,13 +827,7 @@ static void handle_key(WORD vk, WCHAR ch)
     case FOCUS_MAIN:
         if (tui_state.panel == PANEL_PROCESSES) {
             if (ch == L'?') {
-                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
-                if (book) {
-                    tui_state.help_book = book;
-                    tui_state.help_open = 1;
-                    tui_state.help_tab = 0;
-                    tui_state.help_scroll = 0;
-                }
+                tui_open_help();
             } else if (ch == L'/') {
                 /* Jump to the command bar pre-filled with `search ` so the
                    user can type a substring and Enter to filter the list. */
@@ -862,13 +856,7 @@ static void handle_key(WORD vk, WCHAR ch)
         }
         if (tui_state.panel == PANEL_SCANNER) {
             if (ch == L'?') {
-                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
-                if (book) {
-                    tui_state.help_book = book;
-                    tui_state.help_open = 1;
-                    tui_state.help_tab = 0;
-                    tui_state.help_scroll = 0;
-                }
+                tui_open_help();
             } else if (vk == VK_UP && tui_state.scanner_selected_index > 0) {
                 tui_state.scanner_selected_index--;
             } else if (vk == VK_DOWN && tui_state.scanner.has_results &&
@@ -963,24 +951,12 @@ static void handle_key(WORD vk, WCHAR ch)
             } else if (ch == L'v' && count > 0) {
                 tui_hexview_jump(tui_state.address_table.entries[tui_state.address_table_selected].address);
             } else if (ch == L'?') {
-                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
-                if (book) {
-                    tui_state.help_book = book;
-                    tui_state.help_open = 1;
-                    tui_state.help_tab = 0;
-                    tui_state.help_scroll = 0;
-                }
+                tui_open_help();
             }
         }
         if (tui_state.panel == PANEL_HEXVIEW) {
             if (ch == L'?') {
-                const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
-                if (book) {
-                    tui_state.help_book = book;
-                    tui_state.help_open = 1;
-                    tui_state.help_tab = 0;
-                    tui_state.help_scroll = 0;
-                }
+                tui_open_help();
             } else if (ch == L'g' || ch == L'G') {
                 swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"hex ");
                 tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);

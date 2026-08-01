@@ -9,3 +9,14 @@ const HelpBook *tui_help_book_for_panel(int panel)
     if (panel == PANEL_HEXVIEW)   return &tui_help_hexview;
     return NULL;
 }
+
+int tui_open_help(void)
+{
+    const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
+    if (!book) return 0;
+    tui_state.help_book = book;
+    tui_state.help_open = 1;
+    tui_state.help_tab = 0;
+    tui_state.help_scroll = 0;
+    return 1;
+}
