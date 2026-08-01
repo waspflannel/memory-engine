@@ -58,14 +58,7 @@ static PlatformError classify_read_failure(const ScanSession *session, PlatformE
 
 void results_init(ScanResults *results)
 {
-    if (!results) return;
-    results->addresses   = NULL;
-    results->values       = NULL;
-    results->count        = 0;
-    results->capacity     = 0;
-    results->skipped_regions = 0;
-    results->unreadable_candidates = 0;
-    results->value_width  = 0;
+    if (results) *results = (ScanResults){0};
 }
 
 void results_free(ScanResults *results)
@@ -73,13 +66,7 @@ void results_free(ScanResults *results)
     if (!results) return;
     free(results->addresses);
     free(results->values);
-    results->addresses  = NULL;
-    results->values     = NULL;
-    results->count      = 0;
-    results->capacity   = 0;
-    results->skipped_regions = 0;
-    results->unreadable_candidates = 0;
-    results->value_width = 0;
+    *results = (ScanResults){0};
 }
 
 unsigned short scanner_type_width(ScanType type)
