@@ -45,7 +45,6 @@ static const ScanTypeInfo s_type_info[] = {
 
 /* Forward declarations — definitions at bottom of file. */
 static int  append_hit(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width);
-static int  value_equals(const unsigned char *cur, const ScanValue *p);
 static PlatformError match_regions(const ScanSession *session, const ScanRegion *regions, size_t count,
                                     unsigned short width, ScanResults *out);
 static int  worker_fn(void *arg);
@@ -294,7 +293,7 @@ PlatformError scanner_next_scan(ScanSession *session)
                 continue;
             }
         }
-        if (value_equals(cur, &session->param)) {
+        if (memcmp(cur, session->param.bytes, W) == 0) {
             if (!append_hit(&survivors, addr, cur, W)) {
                 results_free(&survivors);
                 return PLATFORM_ERR_INTERNAL;
@@ -386,16 +385,6 @@ void scanner_free_regions(ScanRegion *regions)
 
 /* ---- Static helpers ---- */
 
-static int value_equals(const unsigned char *cur, const ScanValue *p)
-{
-    for (unsigned short i = 0; i < p->width; i++) {
-        if (cur[i] != p->bytes[i]) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 static int append_hit(ScanResults *results, unsigned long long address, const unsigned char *value, size_t width)
 {
     if (!results || !value || width == 0 || width > SCAN_VALUE_MAX) return 0;
@@ -444,7 +433,7 @@ static PlatformError match_regions(const ScanSession *session, const ScanRegion 
 
             size_t last = take - W;
             for (size_t off = 0; off <= last; off++) {
-                if (!value_equals(buf + off, want)) {
+                if (memcmp(buf + off, want->bytes, W) != 0) {
                     continue;
                 }
                 if (!append_hit(out, addr + off, buf + off, W)) {
