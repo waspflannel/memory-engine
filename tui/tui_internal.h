@@ -15,6 +15,7 @@
 #include "core/scanner/scanner.h"
 #include "core/address_table/address_table.h"
 #include "core/hexview/hexview.h"
+#include "core/disasm/disasm.h"
 #include "tui/help.h"
 
 /* Sizes shared by the tui_state definition (tui.c) and the helpers that touch
@@ -25,6 +26,7 @@
 #define MAX_STATUS_TICKS   3000
 #define HEXVIEW_WINDOW_MAX 256
 #define HEXVIEW_REFRESH_INTERVAL_MS 200
+#define DISASM_REFRESH_INTERVAL_MS 200
 
 enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
        PANEL_DISASM, PANEL_DEBUGGER, PANEL_SCRIPTS, PANEL_PROFILES,
@@ -75,6 +77,13 @@ typedef struct {
     int                hexview_window_valid;
     int                hexview_high_nibble;
 
+    unsigned long long disasm_address;
+    size_t             disasm_selected;
+    size_t             disasm_scroll;
+    DisasmResult       disasm_result;
+    ULONGLONG          disasm_last_refresh;
+    int                disasm_window_valid;
+
     int             help_open;
     int             help_tab;
     int             help_scroll;
@@ -100,6 +109,7 @@ void           tui_detach_target(void);
 int            tui_do_attach(DWORD pid);
 void           tui_attach_to_selected(void);
 void           tui_hexview_jump(unsigned long long address);
+void           tui_disasm_jump(unsigned long long address);
 const wchar_t *tui_scan_type_name(ScanType type);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
 int            tui_hex_digit_value(wchar_t c);

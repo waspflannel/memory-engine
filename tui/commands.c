@@ -34,6 +34,7 @@ static void cmd_unlockentry(const wchar_t *args);
 static void cmd_saveentry(const wchar_t *args);
 static void cmd_loadentry(const wchar_t *args);
 static void cmd_hex(const wchar_t *args);
+static void cmd_disasm(const wchar_t *args);
 static const wchar_t *skip_spaces(const wchar_t *text);
 static int parse_unsigned(const wchar_t *text, int base, unsigned long long maximum,
                           unsigned long long *value, const wchar_t **tail);
@@ -58,6 +59,7 @@ static const Command commands[] = {
     { L"saveentry ", cmd_saveentry },
     { L"loadentry ", cmd_loadentry },
     { L"hex ", cmd_hex },
+    { L"disasm ", cmd_disasm },
 };
 
 /* ---- Public API (order matches tui_internal.h) ---- */
@@ -544,6 +546,23 @@ static void cmd_hex(const wchar_t *args)
     }
 
     tui_hexview_jump(address);
+}
+
+static void cmd_disasm(const wchar_t *args)
+{
+    if (!tui_state.attached) {
+        tui_set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    unsigned long long address = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || !tail_is_empty(tail)) {
+        tui_set_status(L"usage: disasm <hex_address>", TRUE);
+        return;
+    }
+
+    tui_disasm_jump(address);
 }
 
 static const wchar_t *skip_spaces(const wchar_t *text)

@@ -37,6 +37,7 @@ add_executable(memforge
     tui/help_books/scanner.c
     tui/help_books/address_table.c
     tui/help_books/hexview.c
+    tui/help_books/disasm.c
 )
 target_link_libraries(memforge PRIVATE memforge_core)
 
@@ -79,6 +80,7 @@ add_executable(tui_command_tests
     tui/help_books/scanner.c
     tui/help_books/address_table.c
     tui/help_books/hexview.c
+    tui/help_books/disasm.c
 )
 target_link_libraries(tui_command_tests PRIVATE memforge_core)
 

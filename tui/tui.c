@@ -65,6 +65,7 @@ static void draw_process_list(Screen *screen);
 static void draw_scanner_panel(Screen *screen);
 static void draw_address_table_panel(Screen *screen);
 static void draw_hexview_panel(Screen *screen);
+static void draw_disasm_panel(Screen *screen);
 static void draw_main_panel(Screen *screen);
 static void draw_command(Screen *screen);
 static void draw_help(Screen *screen);
@@ -75,9 +76,11 @@ static void handle_key(WORD vk, WCHAR ch);
 static void read_input(DWORD timeout);
 static void tick_address_table(void);
 static void tick_hexview(void);
+static void tick_disasm(void);
 static int  update_console_size(void);
 static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count);
 static void refresh_hexview_window(void);
+static void refresh_disasm_window(void);
 
 /* ---- Public API (order matches tui.h) ---- */
 
@@ -126,6 +129,7 @@ void tui_run(void)
     while (tui_state.running) {
         tick_address_table();
         tick_hexview();
+        tick_disasm();
         if (render() != 0) {
             tui_state.running = FALSE;
             break;
@@ -305,6 +309,8 @@ static void draw_main_panel(Screen *screen)
         draw_address_table_panel(screen);
     } else if (tui_state.panel == PANEL_HEXVIEW) {
         draw_hexview_panel(screen);
+    } else if (tui_state.panel == PANEL_DISASM) {
+        draw_disasm_panel(screen);
     } else {
         screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", s_attr_normal);
     }
@@ -564,6 +570,83 @@ static void draw_hexview_panel(Screen *screen)
     if (help_row > row + (int)rows) {
         screen_text(screen, main_x, help_row,
                     L"Arrows move  PgUp/PgDn page  0-9/A-F edit  g jump  ? help", s_attr_border);
+    }
+}
+
+static void draw_disasm_panel(Screen *screen)
+{
+    int main_x = 1 + SIDEBAR_WIDTH + 1;
+    int main_w = tui_state.width - main_x - 1;
+    if (main_w < 10) return;
+
+    if (!tui_state.attached) {
+        screen_text(screen, main_x, CONTENT_START,
+                    L"Attach to a process first, then use `disasm <address>` to jump", s_attr_normal);
+        return;
+    }
+
+    if (!tui_state.disasm_window_valid) {
+        wchar_t line[96];
+        swprintf_s(line, _countof(line), L"Disassembly unavailable at 0x%016llX",
+                   tui_state.disasm_address);
+        screen_text(screen, main_x, CONTENT_START, line, s_attr_error);
+        return;
+    }
+
+    screen_text(screen, main_x, CONTENT_START, L"Disasm  x64  Intel syntax", s_attr_normal);
+    int footer_row = tui_state.height - 4;
+    int visible_rows = footer_row - (CONTENT_START + 1);
+    if (visible_rows < 1) visible_rows = 1;
+
+    if (tui_state.disasm_result.count == 0) {
+        screen_text(screen, main_x, CONTENT_START + 1,
+                    L"No complete instructions in this readable window", s_attr_error);
+    } else {
+        if (tui_state.disasm_selected >= tui_state.disasm_result.count) {
+            tui_state.disasm_selected = tui_state.disasm_result.count - 1;
+        }
+        size_t max_scroll = tui_state.disasm_result.count > (size_t)visible_rows
+            ? tui_state.disasm_result.count - (size_t)visible_rows : 0;
+        if (tui_state.disasm_scroll > max_scroll) tui_state.disasm_scroll = max_scroll;
+        if (tui_state.disasm_selected < tui_state.disasm_scroll) {
+            tui_state.disasm_scroll = tui_state.disasm_selected;
+        } else if (tui_state.disasm_selected >= tui_state.disasm_scroll + (size_t)visible_rows) {
+            tui_state.disasm_scroll = tui_state.disasm_selected - (size_t)visible_rows + 1;
+        }
+
+        int row = CONTENT_START + 1;
+        for (size_t i = tui_state.disasm_scroll;
+             i < tui_state.disasm_result.count && row < footer_row; i++, row++) {
+            const DisasmInstruction *instruction = &tui_state.disasm_result.instructions[i];
+            wchar_t bytes[DISASM_MAX_INSTRUCTION_BYTES * 3 + 1];
+            bytes[0] = L'\0';
+            int byte_pos = 0;
+            for (unsigned char j = 0; j < instruction->length; j++) {
+                byte_pos += swprintf_s(bytes + byte_pos, _countof(bytes) - (size_t)byte_pos,
+                                       L"%02X ", instruction->bytes[j]);
+            }
+
+            wchar_t line[DISASM_OPERANDS_MAX + 128];
+            int selected = tui_state.focus == FOCUS_MAIN && i == tui_state.disasm_selected;
+            if (instruction->has_relative_target) {
+                _snwprintf_s(line, _countof(line), _TRUNCATE,
+                             L"%c  0x%016llX  %-45s %-10S %S  -> 0x%016llX",
+                             selected ? L'>' : L' ', instruction->address, bytes,
+                             instruction->mnemonic, instruction->operands,
+                             instruction->relative_target);
+            } else {
+                _snwprintf_s(line, _countof(line), _TRUNCATE,
+                             L"%c  0x%016llX  %-45s %-10S %S",
+                             selected ? L'>' : L' ', instruction->address, bytes,
+                             instruction->mnemonic, instruction->operands);
+            }
+            screen_text(screen, main_x, row, line, selected ? s_attr_sel : s_attr_normal);
+        }
+    }
+
+    if (footer_row > CONTENT_START + 1) {
+        screen_text(screen, main_x, footer_row,
+                    L"Up/Dn scroll  PgUp/PgDn page  f follow  g jump  ? help", s_attr_border);
     }
 }
 
@@ -1004,6 +1087,55 @@ static void handle_key(WORD vk, WCHAR ch)
                 }
             }
         }
+        if (tui_state.panel == PANEL_DISASM) {
+            size_t count = tui_state.disasm_result.count;
+            int footer_row = tui_state.height - 4;
+            int visible_rows = footer_row - (CONTENT_START + 1);
+            if (visible_rows < 1) visible_rows = 1;
+
+            if (ch == L'?') {
+                tui_open_help();
+            } else if (ch == L'g' || ch == L'G') {
+                prefill_command(L"disasm ");
+            } else if (ch == L'f' || ch == L'F') {
+                if (count == 0 || tui_state.disasm_selected >= count) {
+                    tui_set_status(L"No instruction selected", TRUE);
+                } else if (!tui_state.disasm_result.instructions[tui_state.disasm_selected].has_relative_target) {
+                    tui_set_status(L"Selected instruction has no direct relative target", TRUE);
+                } else {
+                    tui_disasm_jump(tui_state.disasm_result.instructions[tui_state.disasm_selected].relative_target);
+                }
+            } else if (vk == VK_UP && tui_state.disasm_selected > 0) {
+                tui_state.disasm_selected--;
+                if (tui_state.disasm_selected < tui_state.disasm_scroll)
+                    tui_state.disasm_scroll = tui_state.disasm_selected;
+            } else if (vk == VK_DOWN && count > 0) {
+                if (tui_state.disasm_selected + 1 < count) {
+                    tui_state.disasm_selected++;
+                    if (tui_state.disasm_selected >= tui_state.disasm_scroll + (size_t)visible_rows)
+                        tui_state.disasm_scroll = tui_state.disasm_selected - (size_t)visible_rows + 1;
+                } else {
+                    const DisasmInstruction *last = &tui_state.disasm_result.instructions[count - 1];
+                    if (last->address <= ULLONG_MAX - last->length) {
+                        tui_disasm_jump(last->address + last->length);
+                    } else {
+                        tui_set_status(L"Cannot scroll past the end of address space", TRUE);
+                    }
+                }
+            } else if (vk == VK_PRIOR && count > 0) {
+                size_t step = (size_t)visible_rows;
+                tui_state.disasm_selected = tui_state.disasm_selected >= step
+                    ? tui_state.disasm_selected - step : 0;
+                if (tui_state.disasm_selected < tui_state.disasm_scroll)
+                    tui_state.disasm_scroll = tui_state.disasm_selected;
+            } else if (vk == VK_NEXT && count > 0) {
+                size_t step = (size_t)visible_rows;
+                size_t selected = tui_state.disasm_selected + step;
+                tui_state.disasm_selected = selected < count ? selected : count - 1;
+                if (tui_state.disasm_selected >= tui_state.disasm_scroll + (size_t)visible_rows)
+                    tui_state.disasm_scroll = tui_state.disasm_selected - (size_t)visible_rows + 1;
+            }
+        }
         if (vk == VK_ESCAPE) {
             tui_state.focus = FOCUS_SIDEBAR;
         }
@@ -1104,6 +1236,17 @@ static void tick_hexview(void)
     tui_state.hexview_last_refresh = now;
 }
 
+static void tick_disasm(void)
+{
+    if (!tui_state.attached || tui_state.panel != PANEL_DISASM) return;
+
+    ULONGLONG now = GetTickCount64();
+    if (now - tui_state.disasm_last_refresh < DISASM_REFRESH_INTERVAL_MS &&
+        tui_state.disasm_window_valid) return;
+    refresh_disasm_window();
+    tui_state.disasm_last_refresh = now;
+}
+
 static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count)
 {
     int main_x = 1 + SIDEBAR_WIDTH + 1;
@@ -1135,6 +1278,22 @@ static void refresh_hexview_window(void)
         return;
     }
     tui_state.hexview_window_valid = TRUE;
+}
+
+static void refresh_disasm_window(void)
+{
+    tui_state.disasm_window_valid = FALSE;
+    tui_state.disasm_result = (DisasmResult){0};
+
+    PlatformError err = disasm_read(&tui_state.target, tui_state.disasm_address,
+                                    &tui_state.disasm_result);
+    if (err != PLATFORM_OK) {
+        wchar_t message[256];
+        swprintf_s(message, _countof(message), L"Disasm read failed: %S", process_error_string(err));
+        tui_set_status(message, TRUE);
+        return;
+    }
+    tui_state.disasm_window_valid = TRUE;
 }
 
 static int update_console_size(void)

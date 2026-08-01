@@ -80,6 +80,10 @@ DWORD tui_next_wait_timeout(ULONGLONG now)
         ULONGLONG hexview_due = tui_state.hexview_last_refresh + HEXVIEW_REFRESH_INTERVAL_MS;
         if (hexview_due < due) due = hexview_due;
     }
+    if (tui_state.panel == PANEL_DISASM) {
+        ULONGLONG disasm_due = tui_state.disasm_last_refresh + DISASM_REFRESH_INTERVAL_MS;
+        if (disasm_due < due) due = disasm_due;
+    }
     return now >= due ? 0 : (DWORD)(due - now);
 }
 
@@ -99,6 +103,11 @@ void tui_detach_target(void)
     tui_state.hexview_last_refresh = 0;
     tui_state.hexview_high_nibble = -1;
     memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
+    tui_state.disasm_result = (DisasmResult){0};
+    tui_state.disasm_selected = 0;
+    tui_state.disasm_scroll = 0;
+    tui_state.disasm_last_refresh = 0;
+    tui_state.disasm_window_valid = FALSE;
 }
 
 int tui_do_attach(DWORD pid)
@@ -130,6 +139,12 @@ int tui_do_attach(DWORD pid)
     tui_state.hexview_last_refresh = 0;
     tui_state.hexview_high_nibble = -1;
     memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
+    tui_state.disasm_address = tui_state.target.base;
+    tui_state.disasm_selected = 0;
+    tui_state.disasm_scroll = 0;
+    tui_state.disasm_result = (DisasmResult){0};
+    tui_state.disasm_last_refresh = 0;
+    tui_state.disasm_window_valid = FALSE;
 
     wchar_t msg[PROCESS_NAME_MAX + 32];
     swprintf_s(msg, _countof(msg), L"Attached to %s (PID %u)", tui_state.target.name, pid);
@@ -157,6 +172,18 @@ void tui_hexview_jump(unsigned long long address)
     memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
     tui_state.panel = PANEL_HEXVIEW;
     tui_state.sidebar_idx = PANEL_HEXVIEW;
+}
+
+void tui_disasm_jump(unsigned long long address)
+{
+    tui_state.disasm_address = address;
+    tui_state.disasm_selected = 0;
+    tui_state.disasm_scroll = 0;
+    tui_state.disasm_result = (DisasmResult){0};
+    tui_state.disasm_last_refresh = 0;
+    tui_state.disasm_window_valid = FALSE;
+    tui_state.panel = PANEL_DISASM;
+    tui_state.sidebar_idx = PANEL_DISASM;
 }
 
 const wchar_t *tui_scan_type_name(ScanType type)

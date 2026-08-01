@@ -94,6 +94,12 @@ int main(void)
     run_command(L"hex 100junk");
     check(tui_state.status_error, "hex command rejects a trailing address suffix");
 
+    run_command(L"disasm 0");
+    check(tui_state.panel == PANEL_DISASM && tui_state.disasm_address == 0,
+          "disasm command opens the Disasm panel at address zero");
+    run_command(L"disasm 100junk");
+    check(tui_state.status_error, "disasm command rejects a trailing address suffix");
+
     tui_state.attached = FALSE;
     run_command(L"hex 1234");
     check(tui_state.status_error, "hex command requires an attached process");
