@@ -7,7 +7,7 @@
 #include "platform/platform.h"
 
 /* Forward declarations — definitions at bottom of file. */
-static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity, unsigned int n);
+static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity);
 
 /* ---- Public API (order matches platform.h) ---- */
 
@@ -46,7 +46,7 @@ PlatformError platform_list_processes(PlatformProcessEntry **entries, unsigned i
 
     for (;;) {
         if (n >= capacity) {
-            PlatformError err = grow_process_list(&list, &capacity, n);
+            PlatformError err = grow_process_list(&list, &capacity);
             if (err != PLATFORM_OK) {
                 CloseHandle(snap);
                 return err;
@@ -275,17 +275,16 @@ PlatformError platform_enable_debug_privilege(void)
 
 /* ---- Static helpers ---- */
 
-static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity, unsigned int n)
+static PlatformError grow_process_list(PlatformProcessEntry **list, unsigned int *capacity)
 {
-    *capacity *= 2;
-    PlatformProcessEntry *grown = (PlatformProcessEntry *)HeapAlloc(
-        GetProcessHeap(), 0, *capacity * sizeof(PlatformProcessEntry));
+    unsigned int new_capacity = *capacity * 2;
+    PlatformProcessEntry *grown = (PlatformProcessEntry *)HeapReAlloc(
+        GetProcessHeap(), 0, *list, new_capacity * sizeof(PlatformProcessEntry));
     if (!grown) {
         HeapFree(GetProcessHeap(), 0, *list);
         return PLATFORM_ERR_INTERNAL;
     }
-    memcpy(grown, *list, n * sizeof(PlatformProcessEntry));
-    HeapFree(GetProcessHeap(), 0, *list);
     *list = grown;
+    *capacity = new_capacity;
     return PLATFORM_OK;
 }
