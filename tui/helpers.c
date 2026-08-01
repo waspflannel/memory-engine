@@ -81,7 +81,7 @@ DWORD tui_next_wait_timeout(ULONGLONG now)
         if (hexview_due < due) due = hexview_due;
     }
     if (tui_state.panel == PANEL_DISASM) {
-        ULONGLONG disasm_due = tui_state.disasm_last_refresh + DISASM_REFRESH_INTERVAL_MS;
+        ULONGLONG disasm_due = tui_state.disasm_last_refresh + HEXVIEW_REFRESH_INTERVAL_MS;
         if (disasm_due < due) due = disasm_due;
     }
     return now >= due ? 0 : (DWORD)(due - now);

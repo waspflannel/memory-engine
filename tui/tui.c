@@ -1241,7 +1241,7 @@ static void tick_disasm(void)
     if (!tui_state.attached || tui_state.panel != PANEL_DISASM) return;
 
     ULONGLONG now = GetTickCount64();
-    if (now - tui_state.disasm_last_refresh < DISASM_REFRESH_INTERVAL_MS &&
+    if (now - tui_state.disasm_last_refresh < HEXVIEW_REFRESH_INTERVAL_MS &&
         tui_state.disasm_window_valid) return;
     refresh_disasm_window();
     tui_state.disasm_last_refresh = now;

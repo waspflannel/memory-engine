@@ -20,7 +20,6 @@ add_library(memforge_zydis STATIC
 )
 target_include_directories(memforge_zydis PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/vendor/zydis)
 target_compile_definitions(memforge_zydis PUBLIC ZYDIS_STATIC_BUILD)
-target_compile_options(memforge_zydis PRIVATE /W4 /WX /wd5105)
 
 target_include_directories(memforge_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(memforge_core PUBLIC psapi memforge_zydis)
