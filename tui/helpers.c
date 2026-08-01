@@ -323,24 +323,12 @@ static int parse_string_value(const wchar_t *args, ScanValue *out)
     return scanner_value_set(out, SCAN_TYPE_STRING, bytes, n) == PLATFORM_OK;
 }
 
-/* Case-insensitive substring search (ASCII-fold), since process image names
-   are typically ASCII on Windows but case varies between `chrome.exe` and
-   `Chrome.exe`. Returns nonzero if `needle` is found inside `hay`. */
 static int wcsstr_icase(const wchar_t *hay, const wchar_t *needle)
 {
     if (!needle || !*needle) return 1;
-
-    for (const wchar_t *p = hay; *p; p++) {
-        const wchar_t *h = p;
-        const wchar_t *n = needle;
-        while (*h && *n) {
-            wchar_t hc = (*h >= L'A' && *h <= L'Z') ? (wchar_t)(*h + 32) : *h;
-            wchar_t nc = (*n >= L'A' && *n <= L'Z') ? (wchar_t)(*n + 32) : *n;
-            if (hc != nc) break;
-            h++; n++;
-        }
-        if (*n == L'\0') return 1;
-    }
+    size_t length = wcslen(needle);
+    for (const wchar_t *start = hay; *start; start++)
+        if (_wcsnicmp(start, needle, length) == 0) return 1;
     return 0;
 }
 
