@@ -164,7 +164,7 @@ int main(void)
         check(find_value_at(&single, health_addr, &v, sizeof(v)),
               "single results contain health_addr with value 100");
 
-        scanner_free_regions(regs);
+        free(regs);
         results_free(&single);
         scanner_session_destroy(&s);
     }

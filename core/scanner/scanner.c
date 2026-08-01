@@ -169,7 +169,7 @@ PlatformError scanner_first_scan(ScanSession *session)
         ScanResults new_results;
         results_init(&new_results);
         PlatformError e = match_regions(session, regions, region_count, width, &new_results);
-        scanner_free_regions(regions);
+        free(regions);
         if (e != PLATFORM_OK) {
             results_free(&new_results);
             return e;
@@ -225,7 +225,7 @@ PlatformError scanner_first_scan(ScanSession *session)
     }
     if (worst != PLATFORM_OK) {
         for (int i = 0; i < nthreads; i++) results_free(&works[i].results);
-        scanner_free_regions(regions);
+        free(regions);
         return worst;
     }
 
@@ -233,7 +233,7 @@ PlatformError scanner_first_scan(ScanSession *session)
     ScanResults new_results;
     results_init(&new_results);
     PlatformError me = merge_worker_results(works, nthreads, width, &new_results);
-    scanner_free_regions(regions);
+    free(regions);
     if (me != PLATFORM_OK) {
         results_free(&new_results);
         return me;
@@ -359,11 +359,6 @@ PlatformError scanner_list_regions(const Target *target, ScanRegion **regions, s
     *regions = list;
     *count   = n;
     return PLATFORM_OK;
-}
-
-void scanner_free_regions(ScanRegion *regions)
-{
-    free(regions);
 }
 
 /* ---- Static helpers ---- */

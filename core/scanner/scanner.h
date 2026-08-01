@@ -25,7 +25,6 @@ void results_init(ScanResults *results);
 void results_free(ScanResults *results);
 
 PlatformError scanner_list_regions(const Target *target, ScanRegion **regions, size_t *count);
-void          scanner_free_regions(ScanRegion *regions);
 
 typedef enum {
     SCAN_TYPE_I32,   /* first slice (kept first so existing dispatch stays readable) */
