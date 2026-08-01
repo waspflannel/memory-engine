@@ -27,8 +27,6 @@ static const HelpPage proc_pages[] = {
       proc_keys_entries,     HELP_COUNT(proc_keys_entries) },
 };
 
-static const HelpBook proc_book = {
+const HelpBook tui_help_processes = {
     L"Processes Help", proc_pages, HELP_COUNT(proc_pages)
 };
-
-const HelpBook *tui_help_processes_book(void) { return &proc_book; }

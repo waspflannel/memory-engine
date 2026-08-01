@@ -41,8 +41,6 @@ static const HelpPage addr_pages[] = {
       addr_keys_entries,     HELP_COUNT(addr_keys_entries) },
 };
 
-static const HelpBook addr_book = {
+const HelpBook tui_help_address_table = {
     L"Address Table Help", addr_pages, HELP_COUNT(addr_pages)
 };
-
-const HelpBook *tui_help_address_table_book(void) { return &addr_book; }

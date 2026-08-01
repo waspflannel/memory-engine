@@ -26,8 +26,6 @@ static const HelpPage hexview_pages[] = {
       tui_command_help_entries, TUI_COMMAND_HELP_COUNT },
 };
 
-static const HelpBook hexview_book = {
+const HelpBook tui_help_hexview = {
     L"Hex View Help", hexview_pages, HELP_COUNT(hexview_pages)
 };
-
-const HelpBook *tui_help_hexview_book(void) { return &hexview_book; }

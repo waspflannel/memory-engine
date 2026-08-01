@@ -62,8 +62,6 @@ static const HelpPage scanner_pages[] = {
       scanner_keys_entries,     HELP_COUNT(scanner_keys_entries) },
 };
 
-static const HelpBook scanner_book = {
+const HelpBook tui_help_scanner = {
     L"Scanner Help", scanner_pages, HELP_COUNT(scanner_pages)
 };
-
-const HelpBook *tui_help_scanner_book(void) { return &scanner_book; }
