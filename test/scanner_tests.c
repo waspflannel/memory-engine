@@ -9,18 +9,7 @@
 #include "core/process/process.h"
 #include "core/scanner/scanner.h"
 #include "core/memory/memory.h"
-
-static int failures = 0;
-
-static void check(int cond, const char *msg)
-{
-    if (!cond) {
-        failures++;
-        printf("  FAIL: %s\n", msg);
-    } else {
-        printf("  ok: %s\n", msg);
-    }
-}
+#include "test/test.h"
 
 static int find_addr(const ScanResults *r, unsigned long long addr)
 {

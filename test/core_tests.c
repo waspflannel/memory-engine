@@ -4,18 +4,7 @@
 #include "core/process/process.h"
 #include "core/memory/memory.h"
 #include "core/scanner/scanner.h"
-
-static int failures = 0;
-
-static void check(int cond, const char *msg)
-{
-    if (!cond) {
-        failures++;
-        fprintf(stderr, "  FAIL: %s\n", msg);
-    } else {
-        printf("  ok: %s\n", msg);
-    }
-}
+#include "test/test.h"
 
 static void test_error_strings(void)
 {

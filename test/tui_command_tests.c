@@ -6,18 +6,9 @@
 #include <string.h>
 #include <wchar.h>
 #include "tui/tui_internal.h"
+#include "test/test.h"
 
 TuiState tui_state;
-static int failures;
-
-static void check(int condition, const char *message)
-{
-    if (condition) printf("  ok: %s\n", message);
-    else {
-        fprintf(stderr, "  FAIL: %s\n", message);
-        failures++;
-    }
-}
 
 static void run_command(const wchar_t *command)
 {

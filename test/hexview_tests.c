@@ -4,17 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/hexview/hexview.h"
-
-static int failures;
-
-static void check(int condition, const char *message)
-{
-    if (condition) printf("  ok: %s\n", message);
-    else {
-        fprintf(stderr, "  FAIL: %s\n", message);
-        failures++;
-    }
-}
+#include "test/test.h"
 
 static Target current_process_target(void)
 {
