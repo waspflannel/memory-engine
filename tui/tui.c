@@ -109,35 +109,10 @@ int tui_init(void)
     mode |= ENABLE_WINDOW_INPUT;
     if (!SetConsoleMode(tui_state.hIn, mode)) return -1;
 
-    tui_state.panel        = PANEL_PROCESSES;
-    tui_state.sidebar_idx  = 0;
-    tui_state.focus        = FOCUS_SIDEBAR;
-    tui_state.running      = TRUE;
-
-    process_target_init(&tui_state.target);
-    tui_state.attached = FALSE;
-    tui_state.scanner_inited = FALSE;
-    tui_state.string_enc = 0;
+    tui_state.running = TRUE;
 
     if (!addr_table_init(&tui_state.address_table, NULL)) return -1;
-    tui_state.address_table_scroll = 0;
-    tui_state.address_table_selected = 0;
-    tui_state.address_table_last_refresh = 0;
-    tui_state.address_table_last_lock = 0;
-    tui_state.scanner_selected_index = 0;
-    tui_state.hexview_address = 0;
-    tui_state.hexview_cursor = 0;
-    tui_state.hexview_byte_count = 0;
-    tui_state.hexview_bytes_per_row = 0;
-    tui_state.hexview_last_refresh = 0;
-    tui_state.hexview_window_valid = FALSE;
     tui_state.hexview_high_nibble = -1;
-
-    tui_state.help_open = 0;
-    tui_state.help_tab = 0;
-    tui_state.help_scroll = 0;
-    tui_state.help_more_below = 0;
-    tui_state.help_book = NULL;
 
     tui_refresh_process_list();
 
