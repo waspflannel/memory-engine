@@ -3,6 +3,7 @@
 #define _UNICODE
 #include <windows.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
@@ -69,6 +70,7 @@ static void draw_command(Screen *screen);
 static void draw_help(Screen *screen);
 static int  draw_wrapped(Screen *screen, int x, int y, int max_w, const wchar_t *text, WORD attr, int max_rows);
 static int  render(void);
+static void prefill_command(const wchar_t *format, ...);
 static void handle_key(WORD vk, WCHAR ch);
 static void read_input(DWORD timeout);
 static void tick_address_table(void);
@@ -777,6 +779,16 @@ static int render(void)
 
 /* ---- Static helpers: input ---- */
 
+static void prefill_command(const wchar_t *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    vswprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, format, args);
+    va_end(args);
+    tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
+    tui_state.focus = FOCUS_COMMAND;
+}
+
 static void handle_key(WORD vk, WCHAR ch)
 {
     if (tui_state.help_open) {
@@ -831,11 +843,7 @@ static void handle_key(WORD vk, WCHAR ch)
             } else if (ch == L'/') {
                 /* Jump to the command bar pre-filled with `search ` so the
                    user can type a substring and Enter to filter the list. */
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"search ");
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"search ");
             } else if (vk == VK_UP && tui_state.selected_process > 0) {
                 tui_state.selected_process--;
                 if (tui_state.selected_process < tui_state.process_scroll) tui_state.process_scroll = tui_state.selected_process;
@@ -870,28 +878,16 @@ static void handle_key(WORD vk, WCHAR ch)
                 swprintf_s(prompt, _countof(prompt), L"0x%llX", addr);
                 tui_set_status(prompt, FALSE);
                 /* Signal to command handler that next command is addentry from scan */
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"addentry %llX %s ",
-                           addr, tui_scan_type_name(tui_state.scanner.param.type));
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"addentry %llX %s ", addr,
+                                tui_scan_type_name(tui_state.scanner.param.type));
             } else if (ch == L'r' && tui_state.scanner.has_results &&
                        (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
                 unsigned long long addr = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"read %llX ", addr);
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"read %llX ", addr);
             } else if (ch == L'w' && tui_state.scanner.has_results &&
                        (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
                 unsigned long long addr = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"write %llX ", addr);
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"write %llX ", addr);
             }
         }
         if (tui_state.panel == PANEL_ADDRTABLE) {
@@ -914,40 +910,22 @@ static void handle_key(WORD vk, WCHAR ch)
                 addr_table_unlock(&tui_state.address_table, (size_t)tui_state.address_table_selected);
                 tui_set_status(L"Unlocked", FALSE);
             } else if (ch == L'l' && count > 0 && !tui_state.address_table.entries[tui_state.address_table_selected].locked) {
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"lockentry %d ",
-                           tui_state.address_table_selected);
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"lockentry %d ", tui_state.address_table_selected);
             } else if (ch == L'e' && count > 0) {
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"entrylabel %d ",
-                           tui_state.address_table_selected);
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"entrylabel %d ", tui_state.address_table_selected);
             } else if (ch == L'r' && count > 0) {
                 /* Read the selected entry's address -- opens the command bar
                    pre-filled with `read <addr> `; type the byte count (1-128)
                    and Enter. Mirrors the `r` shortcut on the Scanner panel so
                    the same muscle memory works on either page. */
                 unsigned long long addr = tui_state.address_table.entries[tui_state.address_table_selected].address;
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"read %llX ", addr);
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"read %llX ", addr);
             } else if (ch == L'w' && count > 0) {
                 /* Write to the selected entry's address -- opens the command
                    bar pre-filled with `write <addr> `; type hex byte pairs and
                    Enter. Same contract as the Scanner `w` shortcut. */
                 unsigned long long addr = tui_state.address_table.entries[tui_state.address_table_selected].address;
-                tui_state.cmd_buf[0] = L'\0';
-                tui_state.cmd_len = 0;
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"write %llX ", addr);
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"write %llX ", addr);
             } else if (ch == L'v' && count > 0) {
                 tui_hexview_jump(tui_state.address_table.entries[tui_state.address_table_selected].address);
             } else if (ch == L'?') {
@@ -958,9 +936,7 @@ static void handle_key(WORD vk, WCHAR ch)
             if (ch == L'?') {
                 tui_open_help();
             } else if (ch == L'g' || ch == L'G') {
-                swprintf_s(tui_state.cmd_buf, CMD_BUF_MAX, L"hex ");
-                tui_state.cmd_len = (int)wcslen(tui_state.cmd_buf);
-                tui_state.focus = FOCUS_COMMAND;
+                prefill_command(L"hex ");
             } else if (vk == VK_LEFT) {
                 if (tui_state.hexview_cursor > 0) tui_state.hexview_cursor--;
                 else if (tui_state.hexview_address > 0) tui_state.hexview_address--;
