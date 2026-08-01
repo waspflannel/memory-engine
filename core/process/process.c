@@ -1,48 +1,15 @@
-#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include "core/process/process.h"
 
 PlatformError process_list(ProcessEntry **entries, unsigned int *count)
 {
-    if (!entries || !count) {
-        return PLATFORM_ERR_INVALID_PARAM;
-    }
-     
-    PlatformProcessEntry *platform_entries = NULL;
-    unsigned int platform_count = 0;
-
-    PlatformError err = platform_list_processes(&platform_entries, &platform_count);
-    if (err != PLATFORM_OK) {
-        return err;
-    }
-
-    if (platform_count == 0) {
-        *entries = NULL;
-        *count = 0;
-        return PLATFORM_OK;
-    }
-
-    ProcessEntry *list = (ProcessEntry *)malloc(platform_count * sizeof(ProcessEntry));
-    if (!list) {
-        platform_free_process_list(platform_entries);
-        return PLATFORM_ERR_INTERNAL;
-    }
-
-    for (unsigned int i = 0; i < platform_count; i++) {
-        list[i].pid = platform_entries[i].pid;
-        wcsncpy_s(list[i].name, PROCESS_NAME_MAX, platform_entries[i].name, _TRUNCATE);
-    }
-
-    platform_free_process_list(platform_entries);
-    *entries = list;
-    *count   = platform_count;
-    return PLATFORM_OK;
+    return platform_list_processes(entries, count);
 }
 
 void process_free_list(ProcessEntry *entries)
 {
-    free(entries);
+    platform_free_process_list(entries);
 }
 
 void process_target_init(Target *target)
