@@ -74,7 +74,6 @@ static void read_input(DWORD timeout);
 static void tick_address_table(void);
 static void tick_hexview(void);
 static int  update_console_size(void);
-static int  hex_digit_value(WCHAR ch);
 static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count);
 static void refresh_hexview_window(void);
 
@@ -1052,8 +1051,8 @@ static void handle_key(WORD vk, WCHAR ch)
                 tui_state.hexview_cursor = 0;
                 tui_state.hexview_last_refresh = 0;
                 tui_state.hexview_high_nibble = -1;
-            } else if (hex_digit_value(ch) >= 0) {
-                int nibble = hex_digit_value(ch);
+            } else if (tui_hex_digit_value(ch) >= 0) {
+                int nibble = tui_hex_digit_value(ch);
                 if (tui_state.hexview_cursor >= tui_state.hexview_byte_count ||
                     !tui_state.hexview_readable[tui_state.hexview_cursor]) {
                     tui_set_status(L"Cannot edit an unreadable byte", TRUE);
@@ -1176,14 +1175,6 @@ static void tick_hexview(void)
         tui_state.hexview_window_valid) return;
     refresh_hexview_window();
     tui_state.hexview_last_refresh = now;
-}
-
-static int hex_digit_value(WCHAR ch)
-{
-    if (ch >= L'0' && ch <= L'9') return (int)(ch - L'0');
-    if (ch >= L'a' && ch <= L'f') return (int)(ch - L'a') + 10;
-    if (ch >= L'A' && ch <= L'F') return (int)(ch - L'A') + 10;
-    return -1;
 }
 
 static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count)

@@ -13,8 +13,6 @@
 /* Forward declarations — definitions at bottom of file. */
 static int parse_aob_value(const wchar_t *args, ScanValue *out);
 static int parse_string_value(const wchar_t *args, ScanValue *out);
-static int is_hex_wchar(wchar_t c);
-static int hex_wchar_value(wchar_t c);
 static int tail_is_empty(const wchar_t *text);
 static int wcsstr_icase(const wchar_t *hay, const wchar_t *needle);
 static void tui_rebuild_process_view(void);
@@ -259,19 +257,15 @@ int tui_parse_scan_value(const wchar_t *args, ScanValue *out)
     }
 }
 
-/* ---- Static helpers ---- */
-
-static int is_hex_wchar(wchar_t c)
-{
-    return (c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F') || (c >= L'a' && c <= L'f');
-}
-
-static int hex_wchar_value(wchar_t c)
+int tui_hex_digit_value(wchar_t c)
 {
     if (c >= L'0' && c <= L'9') return (int)(c - L'0');
+    if (c >= L'a' && c <= L'f') return (int)(c - L'a') + 10;
     if (c >= L'A' && c <= L'F') return (int)(c - L'A') + 10;
-    return (int)(c - L'a') + 10;
+    return -1;
 }
+
+/* ---- Static helpers ---- */
 
 static int tail_is_empty(const wchar_t *text)
 {
@@ -291,13 +285,11 @@ static int parse_aob_value(const wchar_t *args, ScanValue *out)
 
         if (n >= SCAN_VALUE_MAX) return 0;
 
-        if (is_hex_wchar(p[0]) && is_hex_wchar(p[1])) {
-            bytes[n] = (unsigned char)((hex_wchar_value(p[0]) << 4) | hex_wchar_value(p[1]));
-            n++;
-            p += 2;
-        } else {
-            return 0;   /* malformed token */
-        }
+        int high = tui_hex_digit_value(p[0]);
+        int low = tui_hex_digit_value(p[1]);
+        if (high < 0 || low < 0) return 0;
+        bytes[n++] = (unsigned char)((high << 4) | low);
+        p += 2;
         if (*p && *p != L' ' && *p != L'\t') return 0;
     }
 

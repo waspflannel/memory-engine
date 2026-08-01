@@ -51,7 +51,6 @@ static int parse_unsigned(const wchar_t *text, int base, unsigned long long maxi
 static int parse_index(const wchar_t *text, size_t count, size_t *index, const wchar_t **tail);
 static int tail_is_empty(const wchar_t *text);
 static int narrow_ascii(const wchar_t *text, char *output, size_t capacity);
-static int hex_digit_value(wchar_t c);
 
 /* ---- Public API (order matches tui_internal.h) ---- */
 
@@ -266,12 +265,14 @@ static void cmd_write(const wchar_t *args)
     for (;;) {
         p = skip_spaces(p);
         if (!*p) break;
-        if (byte_count == _countof(buf) || hex_digit_value(p[0]) < 0 ||
-            hex_digit_value(p[1]) < 0 || (p[2] && p[2] != L' ' && p[2] != L'\t')) {
+        int high = tui_hex_digit_value(p[0]);
+        int low = tui_hex_digit_value(p[1]);
+        if (byte_count == _countof(buf) || high < 0 || low < 0 ||
+            (p[2] && p[2] != L' ' && p[2] != L'\t')) {
             tui_set_status(L"usage: write <hex_address> <byte> [byte ...]", TRUE);
             return;
         }
-        buf[byte_count++] = (unsigned char)((hex_digit_value(p[0]) << 4) | hex_digit_value(p[1]));
+        buf[byte_count++] = (unsigned char)((high << 4) | low);
         p += 2;
     }
     if (byte_count == 0) {
@@ -609,7 +610,6 @@ static void cmd_loadentry(const wchar_t *args)
                (unsigned long long)tui_state.address_table.count, filepath);
     tui_set_status(msg, FALSE);
 }
-
 static void cmd_hex(const wchar_t *args)
 {
     if (!tui_state.attached) {
@@ -673,12 +673,4 @@ static int narrow_ascii(const wchar_t *text, char *output, size_t capacity)
     }
     output[length] = '\0';
     return 1;
-}
-
-static int hex_digit_value(wchar_t c)
-{
-    if (c >= L'0' && c <= L'9') return (int)(c - L'0');
-    if (c >= L'a' && c <= L'f') return (int)(c - L'a') + 10;
-    if (c >= L'A' && c <= L'F') return (int)(c - L'A') + 10;
-    return -1;
 }

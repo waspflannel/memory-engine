@@ -102,6 +102,7 @@ void           tui_attach_to_selected(void);
 void           tui_hexview_jump(unsigned long long address);
 const wchar_t *tui_scan_type_name(ScanType type);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
+int            tui_hex_digit_value(wchar_t c);
 
 /* Process list filtering: list rebuilds `process_view` from `processes` using
    the current `process_filter` substring (case-insensitive). An empty needle
