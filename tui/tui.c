@@ -474,6 +474,7 @@ static void draw_address_table_panel(Screen *screen)
         if ((size_t)ei >= table->count) break;
 
         const AddrEntry *entry = &table->entries[ei];
+        unsigned short value_width = scanner_type_width(entry->type);
         int is_sel = (ei == tui_state.address_table_selected && tui_state.focus == FOCUS_MAIN);
         WORD attr = is_sel ? s_attr_sel : s_attr_normal;
 
@@ -484,14 +485,12 @@ static void draw_address_table_panel(Screen *screen)
         if (!entry->value_valid) {
             if (!tui_state.attached) {
                 value_str = L"no process";
-            } else if (entry->value_width == 0) {
-                value_str = L"var";
             } else {
                 value_str = L"err";
             }
         } else {
             int pos = 0;
-            for (unsigned short k = 0; k < entry->value_width && pos < 45; k++) {
+            for (unsigned short k = 0; k < value_width && pos < 45; k++) {
                 pos += swprintf_s(val_buf + pos, _countof(val_buf) - pos,
                                   L"%02X ", entry->current_value[k]);
             }

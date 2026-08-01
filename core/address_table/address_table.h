@@ -7,7 +7,7 @@
 #include "core/memory/memory.h"
 
 #define ADDR_ENTRY_LABEL_MAX 64
-#define ADDR_ENTRY_VALUE_MAX 256
+#define ADDR_ENTRY_VALUE_MAX 8
 #define ADDR_TABLE_LOCK_INTERVAL_MS  50
 #define ADDR_TABLE_REFRESH_INTERVAL_MS 200
 
@@ -19,7 +19,6 @@ typedef struct {
     unsigned char  current_value[ADDR_ENTRY_VALUE_MAX];
     unsigned char  lock_value[ADDR_ENTRY_VALUE_MAX];
     bool           value_valid;
-    unsigned short value_width;
 } AddrEntry;
 
 typedef struct {
