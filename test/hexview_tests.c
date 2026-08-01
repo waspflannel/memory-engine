@@ -30,7 +30,7 @@ static void test_boundary_validation(void)
           "window read rejects a NULL readability buffer");
     check(hexview_read_window(&target, 0, bytes, readable, 0, &region) == PLATFORM_ERR_INVALID_PARAM,
           "window read rejects a zero length");
-    check(hexview_write(&target, 0, NULL, 1) == PLATFORM_ERR_INVALID_PARAM,
+    check(memory_write(&target, 0, NULL, 1) == PLATFORM_ERR_INVALID_PARAM,
           "window write rejects a NULL byte buffer");
 }
 
@@ -91,8 +91,8 @@ static void test_write_and_refresh(void)
                               bytes, readable, sizeof(bytes), &region) == PLATFORM_OK &&
           readable[0] && bytes[0] == value,
           "window reads the current byte");
-    check(hexview_write(&target, (unsigned long long)(UINT_PTR)&value,
-                        &replacement, sizeof(replacement)) == PLATFORM_OK,
+    check(memory_write(&target, (unsigned long long)(UINT_PTR)&value,
+                       &replacement, sizeof(replacement)) == PLATFORM_OK,
           "byte edit writes through core memory");
     check(bytes[0] == 0x10,
           "write does not pretend a cached window refreshed");
@@ -109,8 +109,8 @@ static void test_write_and_refresh(void)
     DWORD old_protect = 0;
     check(VirtualProtect(read_only, info.dwPageSize, PAGE_READONLY, &old_protect),
           "test page becomes read-only");
-    check(hexview_write(&target, (unsigned long long)(UINT_PTR)read_only,
-                        &replacement, sizeof(replacement)) == PLATFORM_ERR_WRITE_FAILED,
+    check(memory_write(&target, (unsigned long long)(UINT_PTR)read_only,
+                       &replacement, sizeof(replacement)) == PLATFORM_ERR_WRITE_FAILED,
           "read-only edit returns a clear write failure");
     VirtualProtect(read_only, info.dwPageSize, old_protect, &old_protect);
     VirtualFree(read_only, 0, MEM_RELEASE);

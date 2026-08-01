@@ -13,7 +13,4 @@ PlatformError hexview_read_window(const Target *target, unsigned long long addre
                                   unsigned char *bytes, unsigned char *readable,
                                   size_t size, MemoryRegion *first_region);
 
-PlatformError hexview_write(const Target *target, unsigned long long address,
-                            const void *bytes, size_t size);
-
 #endif

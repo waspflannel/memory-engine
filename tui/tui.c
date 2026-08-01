@@ -1064,7 +1064,7 @@ static void handle_key(WORD vk, WCHAR ch)
                 } else {
                     unsigned char byte = (unsigned char)((tui_state.hexview_high_nibble << 4) | nibble);
                     unsigned long long address = tui_state.hexview_address + tui_state.hexview_cursor;
-                    PlatformError err = hexview_write(&tui_state.target, address, &byte, sizeof(byte));
+                    PlatformError err = memory_write(&tui_state.target, address, &byte, sizeof(byte));
                     tui_state.hexview_high_nibble = -1;
                     refresh_hexview_window();
                     if (err != PLATFORM_OK) {
