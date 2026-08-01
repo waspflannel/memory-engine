@@ -67,9 +67,6 @@ PlatformError disasm_decode_bytes(const unsigned char *bytes, size_t size,
         offset += decoded.length;
     }
 
-    if (result->count == DISASM_MAX_INSTRUCTIONS && offset < size) {
-        result->has_more = 1;
-    }
     return PLATFORM_OK;
 }
 

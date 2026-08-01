@@ -25,7 +25,6 @@ typedef struct {
     DisasmInstruction instructions[DISASM_MAX_INSTRUCTIONS];
     size_t            count;
     int               stopped_at_decode_failure;
-    int               has_more;
 } DisasmResult;
 
 PlatformError disasm_decode_bytes(const unsigned char *bytes, size_t size,
