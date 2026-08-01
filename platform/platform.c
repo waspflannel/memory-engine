@@ -206,7 +206,6 @@ PlatformError platform_query_region(void *handle, unsigned long long address, Pl
     info->size    = (size_t)mbi.RegionSize;
     info->protect = (unsigned int)mbi.Protect;
     info->state   = (unsigned int)mbi.State;
-    info->type    = (unsigned int)mbi.Type;
 
     return PLATFORM_OK;
 }
@@ -228,13 +227,7 @@ PlatformError platform_get_main_module(void *handle, PlatformModuleInfo *info)
         return PLATFORM_ERR_MODULE_FAILED;
     }
 
-    MODULEINFO modInfo = {0};
-    if (!GetModuleInformation((HANDLE)handle, modules[0], &modInfo, sizeof(modInfo))) {
-        return PLATFORM_ERR_MODULE_FAILED;
-    }
-
-    info->base = (unsigned long long)(UINT_PTR)modInfo.lpBaseOfDll;
-    info->size = (size_t)modInfo.SizeOfImage;
+    info->base = (unsigned long long)(UINT_PTR)modules[0];
 
     DWORD nameLen = GetModuleBaseNameW((HANDLE)handle, modules[0], info->name, PLATFORM_NAME_MAX);
     if (nameLen == 0) {

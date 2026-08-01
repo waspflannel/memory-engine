@@ -12,7 +12,6 @@ typedef struct {
     unsigned int       pid;
     void              *handle;
     unsigned long long base;
-    size_t             base_size;
     wchar_t            name[PROCESS_NAME_MAX];
 } Target;
 

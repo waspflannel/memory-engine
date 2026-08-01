@@ -40,8 +40,7 @@ PlatformError process_attach(unsigned int pid, Target *target)
         return err;
     }
 
-    target->base      = module_info.base;
-    target->base_size = module_info.size;
+    target->base = module_info.base;
     wcsncpy_s(target->name, PROCESS_NAME_MAX, module_info.name, _TRUNCATE);
 
     return PLATFORM_OK;

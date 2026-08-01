@@ -33,12 +33,10 @@ typedef struct {
     size_t             size;
     unsigned int       protect;
     unsigned int       state;
-    unsigned int       type;
 } PlatformRegionInfo;
 
 typedef struct {
     unsigned long long base;
-    size_t             size;
     wchar_t            name[PLATFORM_NAME_MAX];
 } PlatformModuleInfo;
 
