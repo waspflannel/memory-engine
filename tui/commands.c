@@ -411,7 +411,7 @@ static void cmd_search(const wchar_t *args)
     while (*args == L' ') args++;
 
     if (*args == L'\0') {
-        tui_clear_process_filter();
+        tui_set_process_filter(L"");
         return;
     }
 

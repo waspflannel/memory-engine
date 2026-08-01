@@ -70,20 +70,6 @@ void tui_set_process_filter(const wchar_t *needle)
     tui_set_status(msg, FALSE);
 }
 
-void tui_clear_process_filter(void)
-{
-    tui_state.process_filter[0] = L'\0';
-    tui_state.selected_process = 0;
-    tui_state.process_scroll = 0;
-    tui_rebuild_process_view();
-    tui_set_status(L"Filter cleared", FALSE);
-}
-
-int tui_process_filter_active(void)
-{
-    return tui_state.process_filter[0] != L'\0';
-}
-
 DWORD tui_next_wait_timeout(ULONGLONG now)
 {
     if (!tui_state.attached) return INFINITE;

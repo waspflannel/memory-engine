@@ -853,10 +853,10 @@ static void handle_key(WORD vk, WCHAR ch)
                 tui_attach_to_selected();
             } else if (vk == VK_F5) {
                 if (tui_refresh_process_list()) tui_set_status(L"Process list refreshed", FALSE);
-            } else if (vk == VK_ESCAPE && tui_process_filter_active()) {
+            } else if (vk == VK_ESCAPE && tui_state.process_filter[0] != L'\0') {
                 /* Esc on a filtered list clears the filter instead of bouncing
                    back to the sidebar -- one keystroke to widen the view. */
-                tui_clear_process_filter();
+                tui_set_process_filter(L"");
                 return;
             }
         }

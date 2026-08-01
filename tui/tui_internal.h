@@ -108,8 +108,6 @@ int            tui_hex_digit_value(wchar_t c);
    the current `process_filter` substring (case-insensitive). An empty needle
    produces the identity view (every process shown). */
 void           tui_set_process_filter(const wchar_t *needle);
-void           tui_clear_process_filter(void);
-int            tui_process_filter_active(void);
 DWORD          tui_next_wait_timeout(ULONGLONG now);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
