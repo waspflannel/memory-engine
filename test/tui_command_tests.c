@@ -61,6 +61,14 @@ int main(void)
     run_command(long_command);
     check(wcsncmp(tui_state.status_msg, L"Unknown command: ", 17) == 0,
           "long unknown command is reported without aborting");
+    check(tui_state.cmd_len == 0, "unknown command clears the command buffer");
+
+    run_command(L"search chrome");
+    check(wcscmp(tui_state.process_filter, L"chrome") == 0 && tui_state.cmd_len == 0,
+          "prefixed search applies a process filter and clears the command buffer");
+    run_command(L"search");
+    check(tui_state.process_filter[0] == L'\0' && tui_state.cmd_len == 0,
+          "exact search clears a process filter and the command buffer");
 
     unsigned char bytes[2] = {0};
     wchar_t write_command[128];
@@ -77,7 +85,8 @@ int main(void)
     check(tui_state.status_error, "undocumented contiguous write bytes are rejected");
 
     run_command(L"read 1234 129");
-    check(tui_state.status_error, "read rejects counts larger than the display contract");
+    check(tui_state.status_error && tui_state.cmd_len == 0,
+          "read rejects counts larger than the display contract and clears the command buffer");
 
     run_command(L"hex 0");
     check(tui_state.panel == PANEL_HEXVIEW && tui_state.hexview_address == 0,

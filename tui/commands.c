@@ -10,26 +10,15 @@
 #include "tui_internal.h"
 #include "core/memory/memory.h"
 
-/* Command-prefix lengths, tied to the literals in tui_exec_command by name and
-   value: the number is the wide-char length of the corresponding L"<verb> ". */
-#define CMD_ATTACH_PREFIX    7  /* length of L"attach "     */
-#define CMD_READ_PREFIX      5  /* length of L"read "       */
-#define CMD_WRITE_PREFIX     6  /* length of L"write "      */
-#define CMD_SCAN_PREFIX      5  /* length of L"scan "       */
-#define CMD_NEXT_PREFIX      5  /* length of L"next "       */
-#define CMD_TYPE_PREFIX      5  /* length of L"type "       */
-#define CMD_STRENC_PREFIX    7  /* length of L"strenc "     */
-#define CMD_SEARCH_PREFIX    7  /* length of L"search "     */
-#define CMD_ADDENTRY_PREFIX  9  /* length of L"addentry "   */
-#define CMD_DELENTRY_PREFIX  9  /* length of L"delentry "   */
-#define CMD_ENTRYLABEL_PREFIX 11 /* length of L"entrylabel " */
-#define CMD_LOCKENTRY_PREFIX 10 /* length of L"lockentry "  */
-#define CMD_UNLOCKENTRY_PREFIX 12 /* length of L"unlockentry " */
-#define CMD_SAVEENTRY_PREFIX 10 /* length of L"saveentry "  */
-#define CMD_LOADENTRY_PREFIX 10 /* length of L"loadentry "  */
-#define CMD_HEX_PREFIX       4  /* length of L"hex "        */
-
 /* Forward declarations — definitions at bottom of file. */
+typedef void (*CommandHandler)(const wchar_t *args);
+
+typedef struct {
+    const wchar_t *prefix;
+    CommandHandler handler;
+} Command;
+
+static void cmd_attach(const wchar_t *args);
 static void cmd_read(const wchar_t *args);
 static void cmd_write(const wchar_t *args);
 static void cmd_scan(const wchar_t *args);
@@ -52,6 +41,25 @@ static int parse_index(const wchar_t *text, size_t count, size_t *index, const w
 static int tail_is_empty(const wchar_t *text);
 static int narrow_ascii(const wchar_t *text, char *output, size_t capacity);
 
+static const Command commands[] = {
+    { L"attach ", cmd_attach },
+    { L"read ", cmd_read },
+    { L"write ", cmd_write },
+    { L"scan ", cmd_scan },
+    { L"next ", cmd_next },
+    { L"type ", cmd_type },
+    { L"strenc ", cmd_strenc },
+    { L"search ", cmd_search },
+    { L"addentry ", cmd_addentry },
+    { L"delentry ", cmd_delentry },
+    { L"entrylabel ", cmd_entrylabel },
+    { L"lockentry ", cmd_lockentry },
+    { L"unlockentry ", cmd_unlockentry },
+    { L"saveentry ", cmd_saveentry },
+    { L"loadentry ", cmd_loadentry },
+    { L"hex ", cmd_hex },
+};
+
 /* ---- Public API (order matches tui_internal.h) ---- */
 
 void tui_exec_command(void)
@@ -60,19 +68,6 @@ void tui_exec_command(void)
 
     if (wcscmp(tui_state.cmd_buf, L"quit") == 0 || wcscmp(tui_state.cmd_buf, L"exit") == 0) {
         tui_state.running = FALSE;
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"attach ", CMD_ATTACH_PREFIX) == 0) {
-        unsigned long long parsed_pid = 0;
-        const wchar_t *tail = NULL;
-        if (!parse_unsigned(tui_state.cmd_buf + CMD_ATTACH_PREFIX, 10, UINT32_MAX,
-                            &parsed_pid, &tail) || parsed_pid == 0 || !tail_is_empty(tail)) {
-            tui_set_status(L"Invalid PID", TRUE);
-        } else {
-            tui_do_attach((DWORD)parsed_pid);
-        }
         tui_state.cmd_len = 0;
         return;
     }
@@ -88,102 +83,22 @@ void tui_exec_command(void)
         return;
     }
 
-    if (wcsncmp(tui_state.cmd_buf, L"read ", CMD_READ_PREFIX) == 0) {
-        cmd_read(tui_state.cmd_buf + CMD_READ_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"write ", CMD_WRITE_PREFIX) == 0) {
-        cmd_write(tui_state.cmd_buf + CMD_WRITE_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"scan ", CMD_SCAN_PREFIX) == 0) {
-        cmd_scan(tui_state.cmd_buf + CMD_SCAN_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"next ", CMD_NEXT_PREFIX) == 0) {
-        cmd_next(tui_state.cmd_buf + CMD_NEXT_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"type ", CMD_TYPE_PREFIX) == 0) {
-        cmd_type(tui_state.cmd_buf + CMD_TYPE_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"strenc ", CMD_STRENC_PREFIX) == 0) {
-        cmd_strenc(tui_state.cmd_buf + CMD_STRENC_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
     /* `search <name>` filters the Processes panel to entries whose image name
        contains <name> as a case-insensitive substring. `search` alone clears
        any active filter and shows the full list again. */
-    if (wcsncmp(tui_state.cmd_buf, L"search ", CMD_SEARCH_PREFIX) == 0) {
-        cmd_search(tui_state.cmd_buf + CMD_SEARCH_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
     if (wcscmp(tui_state.cmd_buf, L"search") == 0) {
         cmd_search(L"");
         tui_state.cmd_len = 0;
         return;
     }
 
-    if (wcsncmp(tui_state.cmd_buf, L"addentry ", CMD_ADDENTRY_PREFIX) == 0) {
-        cmd_addentry(tui_state.cmd_buf + CMD_ADDENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"delentry ", CMD_DELENTRY_PREFIX) == 0) {
-        cmd_delentry(tui_state.cmd_buf + CMD_DELENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"entrylabel ", CMD_ENTRYLABEL_PREFIX) == 0) {
-        cmd_entrylabel(tui_state.cmd_buf + CMD_ENTRYLABEL_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"lockentry ", CMD_LOCKENTRY_PREFIX) == 0) {
-        cmd_lockentry(tui_state.cmd_buf + CMD_LOCKENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"unlockentry ", CMD_UNLOCKENTRY_PREFIX) == 0) {
-        cmd_unlockentry(tui_state.cmd_buf + CMD_UNLOCKENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"saveentry ", CMD_SAVEENTRY_PREFIX) == 0) {
-        cmd_saveentry(tui_state.cmd_buf + CMD_SAVEENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"loadentry ", CMD_LOADENTRY_PREFIX) == 0) {
-        cmd_loadentry(tui_state.cmd_buf + CMD_LOADENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"hex ", CMD_HEX_PREFIX) == 0) {
-        cmd_hex(tui_state.cmd_buf + CMD_HEX_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
+    for (size_t i = 0; i < _countof(commands); i++) {
+        size_t prefix_length = wcslen(commands[i].prefix);
+        if (wcsncmp(tui_state.cmd_buf, commands[i].prefix, prefix_length) == 0) {
+            commands[i].handler(tui_state.cmd_buf + prefix_length);
+            tui_state.cmd_len = 0;
+            return;
+        }
     }
 
     if (wcscmp(tui_state.cmd_buf, L"help") == 0) {
@@ -199,6 +114,18 @@ void tui_exec_command(void)
 }
 
 /* ---- Static helpers ---- */
+
+static void cmd_attach(const wchar_t *args)
+{
+    unsigned long long parsed_pid = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_unsigned(args, 10, UINT32_MAX, &parsed_pid, &tail) || parsed_pid == 0 ||
+        !tail_is_empty(tail)) {
+        tui_set_status(L"Invalid PID", TRUE);
+    } else {
+        tui_do_attach((DWORD)parsed_pid);
+    }
+}
 
 static void cmd_read(const wchar_t *args)
 {
