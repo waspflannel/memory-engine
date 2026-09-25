@@ -395,7 +395,7 @@ static void draw_scanner_panel(Screen *screen)
         unsigned short w = s->results.value_width;
         unsigned short shown_w = w > 16 ? 16 : w;
         for (size_t i = (size_t)scroll; i < s->results.count && (int)i - scroll < vis_rows; i++) {
-            const unsigned char *val = s->results.values + i * w;
+            const unsigned char *val = s->results.value;
             int is_sel = ((int)i == tui_state.scanner_selected_index && tui_state.focus == FOCUS_MAIN);
             WORD attr = is_sel ? s_attr_sel : s_attr_normal;
             int p = swprintf_s(addrs, _countof(addrs), L"  0x%016llX  ", s->results.addresses[i]);

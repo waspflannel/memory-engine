@@ -2,9 +2,10 @@
 #define SCANNER_H
 
 #include <stddef.h>
+#include <stdatomic.h>
 #include "core/memory/memory.h"
 
-#define SCAN_VALUE_MAX 256  /* max value bytes per hit: covers AOB/string up to 256 */
+#define SCAN_VALUE_MAX 256  /* max exact value bytes: covers AOB/string up to 256 */
 
 typedef struct {
     unsigned long long base;
@@ -13,7 +14,7 @@ typedef struct {
 
 typedef struct {
     unsigned long long *addresses;
-    unsigned char      *values;
+    unsigned char       value[SCAN_VALUE_MAX]; /* identical for every exact-scan hit */
     size_t              count;
     size_t              capacity;
     size_t              skipped_regions;        /* ignored by the latest first scan */
@@ -49,6 +50,7 @@ typedef struct {
 
 typedef struct {
     const Target *target;   /* borrowed, not owned */
+    const atomic_bool *cancel_requested; /* optional, borrowed for the scan lifetime */
     ScanValue     param;        /* value to search for */
     ScanResults   results;
     ScanType      results_type;       /* valid only while has_results is set */
