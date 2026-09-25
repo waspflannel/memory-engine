@@ -26,6 +26,12 @@ void tui_set_status(const wchar_t *msg, int is_error)
     tui_state.status_ticks = GetTickCount64();
 }
 
+void tui_clear_command(void)
+{
+    tui_state.cmd_len = 0;
+    tui_state.cmd_buf[0] = L'\0';
+}
+
 int tui_refresh_process_list(void)
 {
     ProcessEntry *processes = NULL;
@@ -89,6 +95,7 @@ DWORD tui_next_wait_timeout(ULONGLONG now)
 
 void tui_detach_target(void)
 {
+    tui_cancel_scan();
     if (tui_state.scanner_inited) {
         scanner_session_destroy(&tui_state.scanner);
         tui_state.scanner_inited = FALSE;
@@ -316,15 +323,12 @@ static int parse_string_value(const wchar_t *args, ScanValue *out)
     size_t len = wcslen(args);
     if (len == 0) return 0;
 
-    unsigned char bytes[SCAN_VALUE_MAX * 2];
+    unsigned char bytes[SCAN_VALUE_MAX];
     size_t n = 0;
 
     if (tui_state.string_enc == 1) {
         if (len > SCAN_VALUE_MAX / 2) return 0;
-        for (size_t i = 0; i < len; i++) {
-            bytes[n++] = (unsigned char)(args[i] & 0xFF);
-            bytes[n++] = (unsigned char)((args[i] >> 8) & 0xFF);
-        }
+        return scanner_value_set(out, SCAN_TYPE_STRING, args, len * sizeof(*args)) == PLATFORM_OK;
     } else {
         if (len > SCAN_VALUE_MAX) return 0;
         for (size_t i = 0; i < len; i++) {
@@ -376,17 +380,4 @@ static void tui_rebuild_process_view(void)
         tui_state.process_view[n++] = i;
     }
     tui_state.process_view_count = n;
-
-    /* If narrowing dropped the selection (or the list grew on refresh so the
-       selection points past the new view), clamp it back inside. */
-    if ((unsigned int)tui_state.selected_process > tui_state.process_view_count) {
-        tui_state.selected_process = 0;
-        tui_state.process_scroll = 0;
-    }
-    if (tui_state.selected_process > 0 &&
-        (unsigned int)tui_state.selected_process >= tui_state.process_view_count) {
-        tui_state.selected_process =
-            tui_state.process_view_count > 0
-                ? (int)tui_state.process_view_count - 1 : 0;
-    }
 }

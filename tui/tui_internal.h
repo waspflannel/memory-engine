@@ -122,5 +122,12 @@ DWORD          tui_next_wait_timeout(ULONGLONG now);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
 void           tui_exec_command(void);
+void           tui_clear_command(void);
+
+/* scan_job.c -- exclusively owned worker session, joined before target changes. */
+int            tui_scan_is_running(void);
+void           tui_start_scan(const ScanValue *value, int next);
+void           tui_poll_scan(void);
+void           tui_cancel_scan(void);
 
 #endif

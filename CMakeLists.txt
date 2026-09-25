@@ -30,6 +30,7 @@ add_executable(memforge
     tui/tui.c
     tui/commands.c
     tui/helpers.c
+    tui/scan_job.c
     tui/render.c
     tui/help.c
     tui/help_books/commands.c
@@ -74,6 +75,7 @@ add_executable(tui_command_tests
     test/tui_command_tests.c
     tui/commands.c
     tui/helpers.c
+    tui/scan_job.c
     tui/help.c
     tui/help_books/commands.c
     tui/help_books/processes.c
@@ -84,8 +86,27 @@ add_executable(tui_command_tests
 )
 target_link_libraries(tui_command_tests PRIVATE memforge_core)
 
+add_executable(tui_runtime_tests
+    test/tui_runtime_tests.c
+    tui/commands.c
+    tui/helpers.c
+    tui/scan_job.c
+    tui/render.c
+    tui/help.c
+    tui/help_books/commands.c
+    tui/help_books/processes.c
+    tui/help_books/scanner.c
+    tui/help_books/address_table.c
+    tui/help_books/hexview.c
+    tui/help_books/disasm.c
+)
+target_link_libraries(tui_runtime_tests PRIVATE memforge_core)
+
+add_executable(tui_console_tests test/tui_console_tests.c)
+add_dependencies(tui_console_tests memforge)
+
 foreach(target memforge_zydis memforge_core memforge core_tests hexview_tests disasm_tests
-               scanner_tests address_table_tests tui_command_tests)
+               scanner_tests address_table_tests tui_command_tests tui_runtime_tests tui_console_tests)
     target_compile_options(${target} PRIVATE /W4 /WX /wd5105)
 endforeach()
 target_compile_options(test_target PRIVATE /W4 /WX)
@@ -103,3 +124,6 @@ add_test(NAME address_table_tests COMMAND address_table_tests
          WORKING_DIRECTORY $<TARGET_FILE_DIR:address_table_tests>)
 add_test(NAME tui_command_tests COMMAND tui_command_tests
          WORKING_DIRECTORY $<TARGET_FILE_DIR:tui_command_tests>)
+add_test(NAME tui_runtime_tests COMMAND tui_runtime_tests)
+add_test(NAME tui_console_tests COMMAND tui_console_tests $<TARGET_FILE:memforge>)
+set_tests_properties(tui_console_tests PROPERTIES TIMEOUT 40)

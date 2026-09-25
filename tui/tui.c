@@ -127,6 +127,7 @@ int tui_init(void)
 void tui_run(void)
 {
     while (tui_state.running) {
+        tui_poll_scan();
         tick_address_table();
         tick_hexview();
         tick_disasm();
@@ -327,6 +328,10 @@ static void draw_scanner_panel(Screen *screen)
     }
 
     ScanSession *s = &tui_state.scanner;
+    if (tui_scan_is_running()) {
+        screen_text(screen, main_x, CONTENT_START, L"Scanning... address locks remain active", s_attr_normal);
+        return;
+    }
     wchar_t line[160];
     int row = CONTENT_START;
 
@@ -377,8 +382,9 @@ static void draw_scanner_panel(Screen *screen)
             tui_state.scanner_selected_index = s->results.count > 0 ? (int)(s->results.count - 1) : 0;
         }
 
-        int vis_rows = (tui_state.height - 3) - CONTENT_START - 2;
-        if (vis_rows <= 0) vis_rows = 1;
+        int vis_rows = (tui_state.height - 3) - row;
+        if (vis_rows > 1) vis_rows--; /* Reserve a footer only when a hit still fits. */
+        if (vis_rows <= 0) return;
         if (vis_rows > (int)SCANNER_LIST_ROWS) vis_rows = (int)SCANNER_LIST_ROWS;
 
         int scroll = 0;
@@ -408,7 +414,7 @@ static void draw_scanner_panel(Screen *screen)
             screen_text(screen, main_x, row++, addrs, attr);
         }
         if (s->results.count > (size_t)vis_rows) {
-            if ((int)s->results.count - scroll > vis_rows) {
+            if ((int)s->results.count - scroll > vis_rows && row < tui_state.height - 3) {
                 swprintf_s(addrs, _countof(addrs), L"  ... (%llu more)",
                            (unsigned long long)(s->results.count - (size_t)scroll - (size_t)vis_rows));
                 screen_text(screen, main_x, row++, addrs, s_attr_border);
@@ -442,13 +448,18 @@ static void draw_address_table_panel(Screen *screen)
                     L"or press `a` on a scanner hit to promote it.", s_attr_normal);
     }
 
-    int vis_rows = (tui_state.height - 3) - CONTENT_START;
+    int vis_rows = (tui_state.height - 4) - CONTENT_START;
     if (vis_rows <= 0) return;
 
     int max_scroll = (int)table->count - vis_rows;
     if (max_scroll < 0) max_scroll = 0;
     if (tui_state.address_table_scroll > max_scroll) tui_state.address_table_scroll = max_scroll;
     if (tui_state.address_table_scroll < 0) tui_state.address_table_scroll = 0;
+    if (tui_state.address_table_selected < tui_state.address_table_scroll) {
+        tui_state.address_table_scroll = tui_state.address_table_selected;
+    } else if (tui_state.address_table_selected >= tui_state.address_table_scroll + vis_rows) {
+        tui_state.address_table_scroll = tui_state.address_table_selected - vis_rows + 1;
+    }
 
     for (int i = 0; i < vis_rows; i++) {
         int ei = tui_state.address_table_scroll + i;
@@ -656,7 +667,7 @@ static void draw_command(Screen *screen)
 
     wchar_t display[STATUS_MSG_MAX];
     if (tui_state.status_msg[0] && (GetTickCount64() - tui_state.status_ticks) < MAX_STATUS_TICKS) {
-        swprintf_s(display, STATUS_MSG_MAX, L" %s", tui_state.status_msg);
+        _snwprintf_s(display, STATUS_MSG_MAX, _TRUNCATE, L" %s", tui_state.status_msg);
         WORD attr = tui_state.status_error ? s_attr_error : s_attr_normal;
         screen_text(screen, 1, cmd_row, display, attr);
     } else {
@@ -981,7 +992,7 @@ static void handle_key(WORD vk, WCHAR ch)
                     tui_state.address_table_scroll = tui_state.address_table_selected;
             } else if (vk == VK_DOWN && tui_state.address_table_selected + 1 < (int)count) {
                 tui_state.address_table_selected++;
-                int vis_rows = (tui_state.height - 3) - CONTENT_START;
+                int vis_rows = (tui_state.height - 4) - CONTENT_START;
                 if (tui_state.address_table_selected >= tui_state.address_table_scroll + vis_rows)
                     tui_state.address_table_scroll = tui_state.address_table_selected - vis_rows + 1;
             } else if (ch == L'd' && count > 0) {
@@ -1147,7 +1158,7 @@ static void handle_key(WORD vk, WCHAR ch)
         } else if (vk == VK_BACK) {
             if (tui_state.cmd_len > 0) tui_state.cmd_buf[--tui_state.cmd_len] = L'\0';
         } else if (vk == VK_ESCAPE) {
-            tui_state.cmd_len = 0;
+            tui_clear_command();
             tui_state.focus = FOCUS_SIDEBAR;
         } else if (ch >= L' ' && tui_state.cmd_len < CMD_BUF_MAX - 1) {
             tui_state.cmd_buf[tui_state.cmd_len++] = ch;

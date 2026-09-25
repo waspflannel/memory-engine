@@ -70,7 +70,7 @@ void tui_exec_command(void)
 
     if (wcscmp(tui_state.cmd_buf, L"quit") == 0 || wcscmp(tui_state.cmd_buf, L"exit") == 0) {
         tui_state.running = FALSE;
-        tui_state.cmd_len = 0;
+        tui_clear_command();
         return;
     }
 
@@ -81,7 +81,7 @@ void tui_exec_command(void)
         } else {
             tui_set_status(L"No process attached", TRUE);
         }
-        tui_state.cmd_len = 0;
+        tui_clear_command();
         return;
     }
 
@@ -90,7 +90,7 @@ void tui_exec_command(void)
        any active filter and shows the full list again. */
     if (wcscmp(tui_state.cmd_buf, L"search") == 0) {
         cmd_search(L"");
-        tui_state.cmd_len = 0;
+        tui_clear_command();
         return;
     }
 
@@ -98,21 +98,21 @@ void tui_exec_command(void)
         size_t prefix_length = wcslen(commands[i].prefix);
         if (wcsncmp(tui_state.cmd_buf, commands[i].prefix, prefix_length) == 0) {
             commands[i].handler(tui_state.cmd_buf + prefix_length);
-            tui_state.cmd_len = 0;
+            tui_clear_command();
             return;
         }
     }
 
     if (wcscmp(tui_state.cmd_buf, L"help") == 0) {
         if (!tui_open_help()) tui_set_status(L"No help for this panel", TRUE);
-        tui_state.cmd_len = 0;
+        tui_clear_command();
         return;
     }
 
     wchar_t msg[STATUS_MSG_MAX];
     _snwprintf_s(msg, _countof(msg), _TRUNCATE, L"Unknown command: %s", tui_state.cmd_buf);
     tui_set_status(msg, TRUE);
-    tui_state.cmd_len = 0;
+    tui_clear_command();
 }
 
 /* ---- Static helpers ---- */
@@ -151,6 +151,13 @@ static void cmd_read(const wchar_t *args)
         wchar_t msg[256];
         swprintf_s(msg, _countof(msg), L"read failed: %S", process_error_string(err));
         tui_set_status(msg, TRUE);
+        return;
+    }
+
+    /* A long read belongs in the navigable hex view, not a clipped status row. */
+    if ((size_t)size * 3 > (size_t)(tui_state.width > 3 ? tui_state.width - 3 : 0)) {
+        tui_hexview_jump(address);
+        tui_set_status(L"Read succeeded; bytes are available in Hex View", FALSE);
         return;
     }
 
@@ -217,75 +224,39 @@ static void cmd_write(const wchar_t *args)
 
 static void cmd_scan(const wchar_t *args)
 {
-    if (!tui_state.attached || !tui_state.scanner_inited) {
-        tui_set_status(L"No process attached", TRUE);
+    if (tui_scan_is_running()) {
+        tui_set_status(L"A scan is already running", TRUE);
         return;
     }
-
-    if (!tui_parse_scan_value(args, &tui_state.scanner.param)) {
+    ScanValue value = {0};
+    value.type = tui_state.scanner.param.type;
+    if (!tui_parse_scan_value(args, &value)) {
         tui_set_status(L"usage: scan <value>", TRUE);
         return;
     }
-    PlatformError err = scanner_first_scan(&tui_state.scanner);
-    if (err != PLATFORM_OK) {
-        wchar_t msg[256];
-        swprintf_s(msg, _countof(msg), L"first scan failed: %S", process_error_string(err));
-        tui_set_status(msg, TRUE);
-        return;
-    }
-
-    wchar_t msg[160];
-    if (tui_state.scanner.results.skipped_regions > 0) {
-        swprintf_s(msg, _countof(msg), L"First scan: %llu hits; %llu volatile region(s) ignored",
-                   (unsigned long long)tui_state.scanner.results.count,
-                   (unsigned long long)tui_state.scanner.results.skipped_regions);
-    } else {
-        swprintf_s(msg, _countof(msg), L"First scan: %llu hits",
-                   (unsigned long long)tui_state.scanner.results.count);
-    }
-    tui_set_status(msg, FALSE);
+    tui_start_scan(&value, FALSE);
 }
 
 static void cmd_next(const wchar_t *args)
 {
-    if (!tui_state.attached || !tui_state.scanner_inited) {
-        tui_set_status(L"No process attached", TRUE);
+    if (tui_scan_is_running()) {
+        tui_set_status(L"A scan is already running", TRUE);
         return;
     }
-    if (!tui_state.scanner.has_results) {
-        tui_set_status(L"Run `scan <value>` first", TRUE);
+    ScanValue value = {0};
+    value.type = tui_state.scanner.param.type;
+    if (!tui_parse_scan_value(args, &value)) {
+        tui_set_status(L"usage: next <value>", TRUE);
         return;
     }
-
-    ScanSession *s = &tui_state.scanner;
-
-    if (!tui_parse_scan_value(args, &s->param)) {
-        tui_set_status(L"usage: next <value>  (could not parse for current type)", TRUE);
-        return;
-    }
-
-    PlatformError err = scanner_next_scan(s);
-    if (err != PLATFORM_OK) {
-        wchar_t msg[256];
-        swprintf_s(msg, _countof(msg), L"next scan failed: %S", process_error_string(err));
-        tui_set_status(msg, TRUE);
-        return;
-    }
-
-    wchar_t msg[160];
-    if (s->results.unreadable_candidates > 0) {
-        swprintf_s(msg, _countof(msg), L"Next scan: %llu survivors; %llu unreadable candidate(s) removed",
-                   (unsigned long long)s->results.count,
-                   (unsigned long long)s->results.unreadable_candidates);
-    } else {
-        swprintf_s(msg, _countof(msg), L"Next scan: %llu survivors",
-                   (unsigned long long)s->results.count);
-    }
-    tui_set_status(msg, FALSE);
+    tui_start_scan(&value, TRUE);
 }
-
 static void cmd_type(const wchar_t *args)
 {
+    if (tui_scan_is_running()) {
+        tui_set_status(L"Wait for the scan to finish before changing type", TRUE);
+        return;
+    }
     if (!tui_state.attached || !tui_state.scanner_inited) {
         tui_set_status(L"No process attached", TRUE);
         return;

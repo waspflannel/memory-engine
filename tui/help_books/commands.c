@@ -4,7 +4,7 @@ const HelpEntry tui_command_help_entries[TUI_COMMAND_HELP_COUNT] = {
     { L"attach <pid>", L"attach to a running target process by its numeric PID" },
     { L"detach", L"detach from the current target; saved table entries remain inert" },
     { L"search [name]", L"filter process image names case-insensitively; omit the name to clear the filter" },
-    { L"read <addr> <n>", L"read 1-128 bytes from a hexadecimal address and show every byte in the status line" },
+    { L"read <addr> <n>", L"read 1-128 bytes; short reads fit the status line, longer reads open the navigable Hex View" },
     { L"write <addr> <byte> [byte ...]", L"write one or more whitespace-separated hexadecimal byte pairs, for example `write 1234 90 90`" },
     { L"hex <addr>", L"open the live Hex View at a hexadecimal address" },
     { L"disasm <addr>", L"open the x64 disassembler at a hexadecimal address" },
