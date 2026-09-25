@@ -5,12 +5,16 @@
 #include "core/disasm/disasm.h"
 #include "core/memory/memory.h"
 
+#define MEM_COMMIT             0x00001000u
+#define PAGE_READONLY          0x00000002u
+#define PAGE_READWRITE         0x00000004u
+#define PAGE_WRITECOPY         0x00000008u
+#define PAGE_EXECUTE_READ      0x00000020u
+#define PAGE_EXECUTE_READWRITE 0x00000040u
+#define PAGE_EXECUTE_WRITECOPY 0x00000080u
+#define PAGE_GUARD             0x00000100u
+
 /* Forward declarations — definitions at bottom of file. */
-static PlatformError format_operands(const ZydisFormatter *formatter,
-                                     const ZydisDecodedInstruction *instruction,
-                                     const ZydisDecodedOperand *operands,
-                                     unsigned long long address, char *output,
-                                     size_t capacity);
 static void find_relative_target(const ZydisDecodedInstruction *instruction,
                                  const ZydisDecodedOperand *operands,
                                  unsigned long long address, DisasmInstruction *output);
@@ -55,12 +59,11 @@ PlatformError disasm_decode_bytes(const unsigned char *bytes, size_t size,
         output->address = address + (unsigned long long)offset;
         output->length = decoded.length;
         memcpy(output->bytes, bytes + offset, decoded.length);
-        strncpy_s(output->mnemonic, sizeof(output->mnemonic),
-                  ZydisMnemonicGetString(decoded.mnemonic), _TRUNCATE);
-
-        PlatformError err = format_operands(&formatter, &decoded, operands, output->address,
-                                            output->operands, sizeof(output->operands));
-        if (err != PLATFORM_OK) return err;
+        if (!ZYAN_SUCCESS(ZydisFormatterFormatInstruction(&formatter, &decoded, operands,
+                          decoded.operand_count_visible, output->text, sizeof(output->text),
+                          output->address, NULL))) {
+            return PLATFORM_ERR_INTERNAL;
+        }
         find_relative_target(&decoded, operands, output->address, output);
 
         result->count++;
@@ -75,59 +78,39 @@ PlatformError disasm_read(const Target *target, unsigned long long address,
 {
     if (!target || !target->handle || !result) return PLATFORM_ERR_INVALID_PARAM;
 
-    MemoryRegion region = {0};
-    PlatformError err = memory_query(target, address, &region);
-    if (err != PLATFORM_OK) return err;
-    if (address < region.base || address - region.base >= region.size) {
-        return PLATFORM_ERR_QUERY_FAILED;
-    }
-
-    size_t window_size = region.size - (size_t)(address - region.base);
-    if (window_size > DISASM_READ_WINDOW_MAX) window_size = DISASM_READ_WINDOW_MAX;
-    if (window_size == 0) return PLATFORM_ERR_END_OF_ADDRESS_SPACE;
-
+    memset(result, 0, sizeof(*result));
     unsigned char bytes[DISASM_READ_WINDOW_MAX];
-    err = memory_read(target, address, bytes, window_size);
-    if (err != PLATFORM_OK) return err;
+    size_t window_size = 0;
+    while (window_size < sizeof(bytes)) {
+        if (window_size > ULLONG_MAX - address) break;
+        unsigned long long current = address + window_size;
+        MemoryRegion region = {0};
+        PlatformError err = memory_query(target, current, &region);
+        if (err == PLATFORM_ERR_END_OF_ADDRESS_SPACE && window_size > 0) break;
+        if (err != PLATFORM_OK) return err;
+        if (current < region.base || current - region.base >= region.size) {
+            return PLATFORM_ERR_QUERY_FAILED;
+        }
+
+        unsigned int protect = region.protect & 0xFFu;
+        int readable = protect == PAGE_READONLY || protect == PAGE_READWRITE ||
+                       protect == PAGE_WRITECOPY || protect == PAGE_EXECUTE_READ ||
+                       protect == PAGE_EXECUTE_READWRITE || protect == PAGE_EXECUTE_WRITECOPY;
+        if (region.state != MEM_COMMIT || (region.protect & PAGE_GUARD) || !readable) {
+            if (window_size == 0) return PLATFORM_ERR_READ_FAILED;
+            break;
+        }
+
+        size_t segment_size = region.size - (size_t)(current - region.base);
+        if (segment_size > sizeof(bytes) - window_size) segment_size = sizeof(bytes) - window_size;
+        err = memory_read(target, current, bytes + window_size, segment_size);
+        if (err != PLATFORM_OK) return err;
+        window_size += segment_size;
+    }
     return disasm_decode_bytes(bytes, window_size, address, result);
 }
 
 /* ---- Static helpers ---- */
-
-static PlatformError format_operands(const ZydisFormatter *formatter,
-                                     const ZydisDecodedInstruction *instruction,
-                                     const ZydisDecodedOperand *operands,
-                                     unsigned long long address, char *output,
-                                     size_t capacity)
-{
-    size_t used = 0;
-    output[0] = '\0';
-
-    for (ZyanU8 i = 0; i < instruction->operand_count_visible; i++) {
-        char operand[DISASM_OPERANDS_MAX];
-        if (!ZYAN_SUCCESS(ZydisFormatterFormatOperand(formatter, instruction, &operands[i],
-                                                      operand, sizeof(operand), address, NULL))) {
-            return PLATFORM_ERR_INTERNAL;
-        }
-
-        size_t operand_length = strlen(operand);
-        size_t separator_length = used == 0 ? 0 : 2;
-        if (separator_length > capacity - used ||
-            operand_length > capacity - used - separator_length - 1) {
-            return PLATFORM_ERR_INTERNAL;
-        }
-
-        if (separator_length != 0) {
-            output[used++] = ',';
-            output[used++] = ' ';
-        }
-        memcpy(output + used, operand, operand_length);
-        used += operand_length;
-        output[used] = '\0';
-    }
-
-    return PLATFORM_OK;
-}
 
 static void find_relative_target(const ZydisDecodedInstruction *instruction,
                                  const ZydisDecodedOperand *operands,

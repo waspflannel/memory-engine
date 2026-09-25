@@ -7,16 +7,14 @@
 
 #define DISASM_MAX_INSTRUCTION_BYTES 15
 #define DISASM_MAX_INSTRUCTIONS      64
-#define DISASM_MNEMONIC_MAX          32
-#define DISASM_OPERANDS_MAX          256
+#define DISASM_TEXT_MAX              320
 #define DISASM_READ_WINDOW_MAX       1024
 
 typedef struct {
     unsigned long long address;
     unsigned char      bytes[DISASM_MAX_INSTRUCTION_BYTES];
     unsigned char      length;
-    char               mnemonic[DISASM_MNEMONIC_MAX];
-    char               operands[DISASM_OPERANDS_MAX];
+    char               text[DISASM_TEXT_MAX];
     int                has_relative_target;
     unsigned long long relative_target;
 } DisasmInstruction;
@@ -29,6 +27,8 @@ typedef struct {
 
 PlatformError disasm_decode_bytes(const unsigned char *bytes, size_t size,
                                   unsigned long long address, DisasmResult *result);
+/* Read contiguous accessible memory, stopping at an inaccessible region or the
+ * address-space end. Read/query failures are returned; unread bytes are never decoded. */
 PlatformError disasm_read(const Target *target, unsigned long long address,
                           DisasmResult *result);
 

@@ -626,19 +626,19 @@ static void draw_disasm_panel(Screen *screen)
                                        L"%02X ", instruction->bytes[j]);
             }
 
-            wchar_t line[DISASM_OPERANDS_MAX + 128];
+            wchar_t line[DISASM_TEXT_MAX + 128];
             int selected = tui_state.focus == FOCUS_MAIN && i == tui_state.disasm_selected;
             if (instruction->has_relative_target) {
                 _snwprintf_s(line, _countof(line), _TRUNCATE,
-                             L"%c  0x%016llX  %-45s %-10S %S  -> 0x%016llX",
+                             L"%c  0x%016llX  %-45s %S  -> 0x%016llX",
                              selected ? L'>' : L' ', instruction->address, bytes,
-                             instruction->mnemonic, instruction->operands,
+                             instruction->text,
                              instruction->relative_target);
             } else {
                 _snwprintf_s(line, _countof(line), _TRUNCATE,
-                             L"%c  0x%016llX  %-45s %-10S %S",
+                             L"%c  0x%016llX  %-45s %S",
                              selected ? L'>' : L' ', instruction->address, bytes,
-                             instruction->mnemonic, instruction->operands);
+                             instruction->text);
             }
             screen_text(screen, main_x, row, line, selected ? s_attr_sel : s_attr_normal);
         }
