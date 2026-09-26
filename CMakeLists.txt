@@ -11,6 +11,8 @@ add_library(memforge_core STATIC
     core/hexview/hexview.c
     core/disasm/disasm.c
     core/debugger/debugger.c
+    core/debugger/events.c
+    core/debugger/breakpoints.c
     core/scanner/scanner.c
     core/address_table/address_table.c
     platform/platform.c
