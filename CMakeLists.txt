@@ -13,6 +13,7 @@ add_library(memforge_core STATIC
     core/scanner/scanner.c
     core/address_table/address_table.c
     platform/platform.c
+    platform/debugger.c
 )
 
 add_library(memforge_zydis STATIC
