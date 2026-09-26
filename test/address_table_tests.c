@@ -3,21 +3,12 @@
 #include <stdio.h>
 #include <string.h>
 #include "core/address_table/address_table.h"
+#include "test/test.h"
 
 #define TEMP_PATH_MAX MAX_PATH
 #define FIXTURE_PATH_MAX (MAX_PATH + 64)
 
-static int failures;
 static volatile int watched_value = 10;
-
-static void check(int condition, const char *message)
-{
-    if (condition) printf("  ok: %s\n", message);
-    else {
-        fprintf(stderr, "  FAIL: %s\n", message);
-        failures++;
-    }
-}
 
 static int write_text_file(const wchar_t *path, const char *text)
 {

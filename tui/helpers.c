@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 #include <wchar.h>
 
 #include "tui_internal.h"
@@ -12,8 +13,6 @@
 /* Forward declarations — definitions at bottom of file. */
 static int parse_aob_value(const wchar_t *args, ScanValue *out);
 static int parse_string_value(const wchar_t *args, ScanValue *out);
-static int is_hex_wchar(wchar_t c);
-static int hex_wchar_value(wchar_t c);
 static int tail_is_empty(const wchar_t *text);
 static int wcsstr_icase(const wchar_t *hay, const wchar_t *needle);
 static void tui_rebuild_process_view(void);
@@ -25,6 +24,12 @@ void tui_set_status(const wchar_t *msg, int is_error)
     wcsncpy_s(tui_state.status_msg, STATUS_MSG_MAX, msg, _TRUNCATE);
     tui_state.status_error = is_error;
     tui_state.status_ticks = GetTickCount64();
+}
+
+void tui_clear_command(void)
+{
+    tui_state.cmd_len = 0;
+    tui_state.cmd_buf[0] = L'\0';
 }
 
 int tui_refresh_process_list(void)
@@ -71,31 +76,26 @@ void tui_set_process_filter(const wchar_t *needle)
     tui_set_status(msg, FALSE);
 }
 
-void tui_clear_process_filter(void)
-{
-    tui_state.process_filter[0] = L'\0';
-    tui_state.selected_process = 0;
-    tui_state.process_scroll = 0;
-    tui_rebuild_process_view();
-    tui_set_status(L"Filter cleared", FALSE);
-}
-
-int tui_process_filter_active(void)
-{
-    return tui_state.process_filter[0] != L'\0';
-}
-
 DWORD tui_next_wait_timeout(ULONGLONG now)
 {
     if (!tui_state.attached) return INFINITE;
     ULONGLONG refresh_due = tui_state.address_table_last_refresh + ADDR_TABLE_REFRESH_INTERVAL_MS;
     ULONGLONG lock_due = tui_state.address_table_last_lock + ADDR_TABLE_LOCK_INTERVAL_MS;
     ULONGLONG due = refresh_due < lock_due ? refresh_due : lock_due;
+    if (tui_state.panel == PANEL_HEXVIEW) {
+        ULONGLONG hexview_due = tui_state.hexview_last_refresh + HEXVIEW_REFRESH_INTERVAL_MS;
+        if (hexview_due < due) due = hexview_due;
+    }
+    if (tui_state.panel == PANEL_DISASM) {
+        ULONGLONG disasm_due = tui_state.disasm_last_refresh + HEXVIEW_REFRESH_INTERVAL_MS;
+        if (disasm_due < due) due = disasm_due;
+    }
     return now >= due ? 0 : (DWORD)(due - now);
 }
 
 void tui_detach_target(void)
 {
+    tui_cancel_scan();
     if (tui_state.scanner_inited) {
         scanner_session_destroy(&tui_state.scanner);
         tui_state.scanner_inited = FALSE;
@@ -105,6 +105,16 @@ void tui_detach_target(void)
     tui_state.attached = FALSE;
     tui_state.address_table_last_refresh = 0;
     tui_state.address_table_last_lock = 0;
+    tui_state.hexview_byte_count = 0;
+    tui_state.hexview_window_valid = FALSE;
+    tui_state.hexview_last_refresh = 0;
+    tui_state.hexview_high_nibble = -1;
+    memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
+    tui_state.disasm_result = (DisasmResult){0};
+    tui_state.disasm_selected = 0;
+    tui_state.disasm_scroll = 0;
+    tui_state.disasm_last_refresh = 0;
+    tui_state.disasm_window_valid = FALSE;
 }
 
 int tui_do_attach(DWORD pid)
@@ -129,6 +139,19 @@ int tui_do_attach(DWORD pid)
     tui_state.address_table_last_refresh = 0;
     tui_state.address_table_last_lock = 0;
     tui_state.scanner_selected_index = 0;
+    tui_state.hexview_address = tui_state.target.base;
+    tui_state.hexview_cursor = 0;
+    tui_state.hexview_byte_count = 0;
+    tui_state.hexview_window_valid = FALSE;
+    tui_state.hexview_last_refresh = 0;
+    tui_state.hexview_high_nibble = -1;
+    memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
+    tui_state.disasm_address = tui_state.target.base;
+    tui_state.disasm_selected = 0;
+    tui_state.disasm_scroll = 0;
+    tui_state.disasm_result = (DisasmResult){0};
+    tui_state.disasm_last_refresh = 0;
+    tui_state.disasm_window_valid = FALSE;
 
     wchar_t msg[PROCESS_NAME_MAX + 32];
     swprintf_s(msg, _countof(msg), L"Attached to %s (PID %u)", tui_state.target.name, pid);
@@ -143,6 +166,31 @@ void tui_attach_to_selected(void)
 
     unsigned int idx = tui_state.process_view[tui_state.selected_process];
     tui_do_attach(tui_state.processes[idx].pid);
+}
+
+void tui_hexview_jump(unsigned long long address)
+{
+    tui_state.hexview_address = address;
+    tui_state.hexview_cursor = 0;
+    tui_state.hexview_byte_count = 0;
+    tui_state.hexview_window_valid = FALSE;
+    tui_state.hexview_last_refresh = 0;
+    tui_state.hexview_high_nibble = -1;
+    memset(tui_state.hexview_readable, 0, sizeof(tui_state.hexview_readable));
+    tui_state.panel = PANEL_HEXVIEW;
+    tui_state.sidebar_idx = PANEL_HEXVIEW;
+}
+
+void tui_disasm_jump(unsigned long long address)
+{
+    tui_state.disasm_address = address;
+    tui_state.disasm_selected = 0;
+    tui_state.disasm_scroll = 0;
+    tui_state.disasm_result = (DisasmResult){0};
+    tui_state.disasm_last_refresh = 0;
+    tui_state.disasm_window_valid = FALSE;
+    tui_state.panel = PANEL_DISASM;
+    tui_state.sidebar_idx = PANEL_DISASM;
 }
 
 const wchar_t *tui_scan_type_name(ScanType type)
@@ -229,19 +277,15 @@ int tui_parse_scan_value(const wchar_t *args, ScanValue *out)
     }
 }
 
-/* ---- Static helpers ---- */
-
-static int is_hex_wchar(wchar_t c)
-{
-    return (c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F') || (c >= L'a' && c <= L'f');
-}
-
-static int hex_wchar_value(wchar_t c)
+int tui_hex_digit_value(wchar_t c)
 {
     if (c >= L'0' && c <= L'9') return (int)(c - L'0');
+    if (c >= L'a' && c <= L'f') return (int)(c - L'a') + 10;
     if (c >= L'A' && c <= L'F') return (int)(c - L'A') + 10;
-    return (int)(c - L'a') + 10;
+    return -1;
 }
+
+/* ---- Static helpers ---- */
 
 static int tail_is_empty(const wchar_t *text)
 {
@@ -261,13 +305,11 @@ static int parse_aob_value(const wchar_t *args, ScanValue *out)
 
         if (n >= SCAN_VALUE_MAX) return 0;
 
-        if (is_hex_wchar(p[0]) && is_hex_wchar(p[1])) {
-            bytes[n] = (unsigned char)((hex_wchar_value(p[0]) << 4) | hex_wchar_value(p[1]));
-            n++;
-            p += 2;
-        } else {
-            return 0;   /* malformed token */
-        }
+        int high = tui_hex_digit_value(p[0]);
+        int low = tui_hex_digit_value(p[1]);
+        if (high < 0 || low < 0) return 0;
+        bytes[n++] = (unsigned char)((high << 4) | low);
+        p += 2;
         if (*p && *p != L' ' && *p != L'\t') return 0;
     }
 
@@ -281,15 +323,12 @@ static int parse_string_value(const wchar_t *args, ScanValue *out)
     size_t len = wcslen(args);
     if (len == 0) return 0;
 
-    unsigned char bytes[SCAN_VALUE_MAX * 2];
+    unsigned char bytes[SCAN_VALUE_MAX];
     size_t n = 0;
 
     if (tui_state.string_enc == 1) {
         if (len > SCAN_VALUE_MAX / 2) return 0;
-        for (size_t i = 0; i < len; i++) {
-            bytes[n++] = (unsigned char)(args[i] & 0xFF);
-            bytes[n++] = (unsigned char)((args[i] >> 8) & 0xFF);
-        }
+        return scanner_value_set(out, SCAN_TYPE_STRING, args, len * sizeof(*args)) == PLATFORM_OK;
     } else {
         if (len > SCAN_VALUE_MAX) return 0;
         for (size_t i = 0; i < len; i++) {
@@ -301,24 +340,12 @@ static int parse_string_value(const wchar_t *args, ScanValue *out)
     return scanner_value_set(out, SCAN_TYPE_STRING, bytes, n) == PLATFORM_OK;
 }
 
-/* Case-insensitive substring search (ASCII-fold), since process image names
-   are typically ASCII on Windows but case varies between `chrome.exe` and
-   `Chrome.exe`. Returns nonzero if `needle` is found inside `hay`. */
 static int wcsstr_icase(const wchar_t *hay, const wchar_t *needle)
 {
     if (!needle || !*needle) return 1;
-
-    for (const wchar_t *p = hay; *p; p++) {
-        const wchar_t *h = p;
-        const wchar_t *n = needle;
-        while (*h && *n) {
-            wchar_t hc = (*h >= L'A' && *h <= L'Z') ? (wchar_t)(*h + 32) : *h;
-            wchar_t nc = (*n >= L'A' && *n <= L'Z') ? (wchar_t)(*n + 32) : *n;
-            if (hc != nc) break;
-            h++; n++;
-        }
-        if (*n == L'\0') return 1;
-    }
+    size_t length = wcslen(needle);
+    for (const wchar_t *start = hay; *start; start++)
+        if (_wcsnicmp(start, needle, length) == 0) return 1;
     return 0;
 }
 
@@ -353,17 +380,4 @@ static void tui_rebuild_process_view(void)
         tui_state.process_view[n++] = i;
     }
     tui_state.process_view_count = n;
-
-    /* If narrowing dropped the selection (or the list grew on refresh so the
-       selection points past the new view), clamp it back inside. */
-    if ((unsigned int)tui_state.selected_process > tui_state.process_view_count) {
-        tui_state.selected_process = 0;
-        tui_state.process_scroll = 0;
-    }
-    if (tui_state.selected_process > 0 &&
-        (unsigned int)tui_state.selected_process >= tui_state.process_view_count) {
-        tui_state.selected_process =
-            tui_state.process_view_count > 0
-                ? (int)tui_state.process_view_count - 1 : 0;
-    }
 }

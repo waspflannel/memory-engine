@@ -6,18 +6,9 @@
 #include <string.h>
 #include <wchar.h>
 #include "tui/tui_internal.h"
+#include "test/test.h"
 
 TuiState tui_state;
-static int failures;
-
-static void check(int condition, const char *message)
-{
-    if (condition) printf("  ok: %s\n", message);
-    else {
-        fprintf(stderr, "  FAIL: %s\n", message);
-        failures++;
-    }
-}
 
 static void run_command(const wchar_t *command)
 {
@@ -41,6 +32,13 @@ int main(void)
     tui_state.address_table_last_lock = 1000;
     check(tui_next_wait_timeout(1025) == 25,
           "attached TUI waits until the nearest lock deadline");
+    tui_state.panel = PANEL_HEXVIEW;
+    tui_state.address_table_last_refresh = 2000;
+    tui_state.address_table_last_lock = 2000;
+    tui_state.hexview_last_refresh = 1000;
+    check(tui_next_wait_timeout(1100) == 100,
+          "Hex View keeps the idle loop awake for its visible-window refresh");
+    tui_state.panel = PANEL_PROCESSES;
 
     volatile int watched = 10;
     check(addr_table_add(&tui_state.address_table, "watched", SCAN_TYPE_I32,
@@ -63,6 +61,14 @@ int main(void)
     run_command(long_command);
     check(wcsncmp(tui_state.status_msg, L"Unknown command: ", 17) == 0,
           "long unknown command is reported without aborting");
+    check(tui_state.cmd_len == 0, "unknown command clears the command buffer");
+
+    run_command(L"search chrome");
+    check(wcscmp(tui_state.process_filter, L"chrome") == 0 && tui_state.cmd_len == 0,
+          "prefixed search applies a process filter and clears the command buffer");
+    run_command(L"search");
+    check(tui_state.process_filter[0] == L'\0' && tui_state.cmd_len == 0,
+          "exact search clears a process filter and the command buffer");
 
     unsigned char bytes[2] = {0};
     wchar_t write_command[128];
@@ -79,7 +85,25 @@ int main(void)
     check(tui_state.status_error, "undocumented contiguous write bytes are rejected");
 
     run_command(L"read 1234 129");
-    check(tui_state.status_error, "read rejects counts larger than the display contract");
+    check(tui_state.status_error && tui_state.cmd_len == 0,
+          "read rejects counts larger than the display contract and clears the command buffer");
+
+    run_command(L"hex 0");
+    check(tui_state.panel == PANEL_HEXVIEW && tui_state.hexview_address == 0,
+          "hex command opens the Hex View at address zero");
+    run_command(L"hex 100junk");
+    check(tui_state.status_error, "hex command rejects a trailing address suffix");
+
+    run_command(L"disasm 0");
+    check(tui_state.panel == PANEL_DISASM && tui_state.disasm_address == 0,
+          "disasm command opens the Disasm panel at address zero");
+    run_command(L"disasm 100junk");
+    check(tui_state.status_error, "disasm command rejects a trailing address suffix");
+
+    tui_state.attached = FALSE;
+    run_command(L"hex 1234");
+    check(tui_state.status_error, "hex command requires an attached process");
+    tui_state.attached = TRUE;
 
     ScanValue value = {0};
     value.type = SCAN_TYPE_U32;

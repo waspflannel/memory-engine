@@ -9,18 +9,7 @@
 #include "core/process/process.h"
 #include "core/scanner/scanner.h"
 #include "core/memory/memory.h"
-
-static int failures = 0;
-
-static void check(int cond, const char *msg)
-{
-    if (!cond) {
-        failures++;
-        printf("  FAIL: %s\n", msg);
-    } else {
-        printf("  ok: %s\n", msg);
-    }
-}
+#include "test/test.h"
 
 static int find_addr(const ScanResults *r, unsigned long long addr)
 {
@@ -35,7 +24,7 @@ static int find_value_at(const ScanResults *r, unsigned long long addr,
 {
     for (size_t i = 0; i < r->count; i++) {
         if (r->addresses[i] == addr &&
-            memcmp(r->values + i * r->value_width, expected, width) == 0) {
+            r->value_width == width && memcmp(r->value, expected, width) == 0) {
             return 1;
         }
     }
@@ -175,7 +164,7 @@ int main(void)
         check(find_value_at(&single, health_addr, &v, sizeof(v)),
               "single results contain health_addr with value 100");
 
-        scanner_free_regions(regs);
+        free(regs);
         results_free(&single);
         scanner_session_destroy(&s);
     }
@@ -196,6 +185,8 @@ int main(void)
               "next scan rejects a same-width type change");
         check(s.results.count == prior_count && s.results.addresses == prior_addresses,
               "rejected type change preserves prior results atomically");
+        check(find_value_at(&s.results, health_addr, &v100, sizeof(v100)),
+              "changing the query leaves the saved matched value intact");
 
         int v50 = 50;
         check(memory_write(&target, health_addr, &v50, sizeof(v50)) == PLATFORM_OK, "write 50 to health_addr");
@@ -203,6 +194,8 @@ int main(void)
         check(scanner_next_scan(&s) == PLATFORM_OK, "next scan for 50");
         check(s.results.count > 0, "narrowing to 50 has survivors");
         check(find_addr(&s.results, health_addr), "health_addr survives narrowing to 50");
+        check(find_value_at(&s.results, health_addr, &v50, sizeof(v50)),
+              "successful narrowing replaces the saved matched value");
 
         int v25 = 25;
         memory_write(&target, health_addr, &v25, sizeof(v25));
@@ -299,6 +292,51 @@ int main(void)
         check_fixed_type(&self, SCAN_TYPE_U64, &u64, sizeof(u64), "u64 controlled scan");
         check_fixed_type(&self, SCAN_TYPE_F64, &f64, sizeof(f64), "f64 controlled scan");
 
+        const unsigned char fragmented[] = {0xCA, 0xFE, 0xBA, 0xBE};
+        ScanRegion fragments[4];
+        for (size_t i = 0; i < 4; i++) {
+            fragments[i] = (ScanRegion){(unsigned long long)(UINT_PTR)(fragmented + i), 1};
+        }
+        ScanSession fragmented_session;
+        scanner_session_init(&fragmented_session, &self, SCAN_TYPE_AOB);
+        scanner_value_set(&fragmented_session.param, SCAN_TYPE_AOB, fragmented, sizeof(fragmented));
+        ScanResults fragmented_results;
+        results_init(&fragmented_results);
+        check(scanner_find_hits(&fragmented_session, fragments, 4, &fragmented_results) == PLATFORM_OK &&
+              fragmented_results.count == 1 && fragmented_results.addresses[0] == fragments[0].base,
+              "match spans multiple regions smaller than its width exactly once");
+        results_free(&fragmented_results);
+        check(scanner_find_hits(&fragmented_session, fragments, 2, &fragmented_results) == PLATFORM_OK &&
+              fragmented_results.count == 0 && fragmented_results.value_width == sizeof(fragmented),
+              "zero-hit scan retains matched value metadata");
+        results_free(&fragmented_results);
+        ScanRegion gap_regions[] = {fragments[0], fragments[2], fragments[3]};
+        check(scanner_find_hits(&fragmented_session, gap_regions, 3, &fragmented_results) == PLATFORM_OK &&
+              fragmented_results.count == 0, "scan never bridges a gap in readable regions");
+        results_free(&fragmented_results);
+
+        atomic_bool cancel_requested;
+        atomic_init(&cancel_requested, 1);
+        fragmented_session.cancel_requested = &cancel_requested;
+        check(scanner_find_hits(&fragmented_session, fragments, 4, &fragmented_results) == PLATFORM_ERR_INTERNAL,
+              "cancelled matching stops before reading chunks");
+        results_free(&fragmented_results);
+        check(scanner_first_scan(&fragmented_session) == PLATFORM_ERR_INTERNAL &&
+              !fragmented_session.has_results, "cancelled first scan stops enumeration without results");
+        atomic_store(&cancel_requested, 0);
+        check(scanner_find_hits(&fragmented_session, fragments, 4, &fragmented_session.results) == PLATFORM_OK,
+              "clearing cancellation permits another scan");
+        fragmented_session.has_results = 1;
+        fragmented_session.results_type = SCAN_TYPE_AOB;
+        unsigned long long *saved_addresses = fragmented_session.results.addresses;
+        fragmented_session.param.bytes[0] = 0;
+        atomic_store(&cancel_requested, 1);
+        check(scanner_next_scan(&fragmented_session) == PLATFORM_ERR_INTERNAL &&
+              fragmented_session.results.addresses == saved_addresses &&
+              find_value_at(&fragmented_session.results, fragments[0].base, fragmented, sizeof(fragmented)),
+              "cancelled next scan preserves prior addresses and matched value");
+        scanner_session_destroy(&fragmented_session);
+
         unsigned char *memory = (unsigned char *)VirtualAlloc(NULL, 65544,
             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         check(memory != NULL, "allocate controlled chunk-boundary region");
@@ -330,6 +368,7 @@ int main(void)
         if (split_memory) {
             const unsigned char pattern[] = { 0xFA, 0xCE, 0xCA, 0xFE };
             memset(split_memory, 0, page_size * 2);
+            memcpy(split_memory, pattern, sizeof(pattern));
             memcpy(split_memory + page_size - 2, pattern, sizeof(pattern));
 
             DWORD old_protect = 0;
@@ -340,19 +379,32 @@ int main(void)
                 ScanSession session;
                 scanner_session_init(&session, &self, SCAN_TYPE_AOB);
                 scanner_value_set(&session.param, SCAN_TYPE_AOB, pattern, sizeof(pattern));
-                ScanRegion region = {
-                    (unsigned long long)(UINT_PTR)split_memory,
-                    page_size * 2,
-                };
+                ScanRegion *enumerated = NULL;
+                size_t region_count = 0;
+                check(scanner_list_regions(&self, &enumerated, &region_count) == PLATFORM_OK,
+                      "enumerate actual readable protection regions");
+                ScanRegion regions[2] = {0};
+                size_t split_count = 0;
+                unsigned long long base = (unsigned long long)(UINT_PTR)split_memory;
+                for (size_t i = 0; i < region_count; i++) {
+                    if (enumerated[i].base >= base && enumerated[i].base < base + page_size * 2 &&
+                        split_count < 2) regions[split_count++] = enumerated[i];
+                }
+                free(enumerated);
+                check(split_count == 2, "enumeration keeps the two protection regions separate");
                 ScanResults results;
                 results_init(&results);
-                check(scanner_find_hits(&session, &region, 1, &results) == PLATFORM_OK,
+                check(scanner_find_hits(&session, regions, split_count, &results) == PLATFORM_OK,
                       "scan crosses adjacent readable protection regions");
-                check(find_addr(&results, region.base + page_size - 2),
+                check(find_addr(&results, base + page_size - 2),
                       "match spanning a readable protection boundary is found");
                 check(results.skipped_regions == 0,
                       "readable protection boundary is not reported as skipped");
                 results_free(&results);
+
+                check(scanner_first_scan(&session) == PLATFORM_OK &&
+                      find_addr(&session.results, base + page_size - 2),
+                      "threaded first scan finds match across enumerated region boundary");
 
                 DWORD readonly_protect = 0;
                 BOOL made_inaccessible = VirtualProtect(split_memory + page_size, page_size,
@@ -360,10 +412,12 @@ int main(void)
                 check(made_inaccessible != 0, "make an enumerated page inaccessible");
                 if (made_inaccessible) {
                     results_init(&results);
-                    check(scanner_find_hits(&session, &region, 1, &results) == PLATFORM_OK,
+                    check(scanner_find_hits(&session, regions, split_count, &results) == PLATFORM_OK,
                           "live inaccessible region does not abort first-scan matching");
                     check(results.skipped_regions == 1,
                           "live inaccessible region is counted as skipped");
+                    check(results.count == 1 && find_addr(&results, base),
+                          "inaccessible neighbor preserves hits in the readable region");
                     results_free(&results);
                 }
                 scanner_session_destroy(&session);

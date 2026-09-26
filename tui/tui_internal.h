@@ -14,6 +14,8 @@
 #include "core/process/process.h"
 #include "core/scanner/scanner.h"
 #include "core/address_table/address_table.h"
+#include "core/hexview/hexview.h"
+#include "core/disasm/disasm.h"
 #include "tui/help.h"
 
 /* Sizes shared by the tui_state definition (tui.c) and the helpers that touch
@@ -22,6 +24,8 @@
 #define CMD_BUF_MAX        256
 #define STATUS_MSG_MAX     512
 #define MAX_STATUS_TICKS   3000
+#define HEXVIEW_WINDOW_MAX 256
+#define HEXVIEW_REFRESH_INTERVAL_MS 200
 
 enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
        PANEL_DISASM, PANEL_DEBUGGER, PANEL_SCRIPTS, PANEL_PROFILES,
@@ -61,6 +65,24 @@ typedef struct {
     ULONGLONG  address_table_last_lock;
     int        scanner_selected_index;
 
+    unsigned long long hexview_address;
+    size_t             hexview_cursor;
+    size_t             hexview_byte_count;
+    unsigned short     hexview_bytes_per_row;
+    unsigned char      hexview_bytes[HEXVIEW_WINDOW_MAX];
+    unsigned char      hexview_readable[HEXVIEW_WINDOW_MAX];
+    MemoryRegion       hexview_first_region;
+    ULONGLONG          hexview_last_refresh;
+    int                hexview_window_valid;
+    int                hexview_high_nibble;
+
+    unsigned long long disasm_address;
+    size_t             disasm_selected;
+    size_t             disasm_scroll;
+    DisasmResult       disasm_result;
+    ULONGLONG          disasm_last_refresh;
+    int                disasm_window_valid;
+
     int             help_open;
     int             help_tab;
     int             help_scroll;
@@ -85,18 +107,27 @@ int            tui_refresh_process_list(void);
 void           tui_detach_target(void);
 int            tui_do_attach(DWORD pid);
 void           tui_attach_to_selected(void);
+void           tui_hexview_jump(unsigned long long address);
+void           tui_disasm_jump(unsigned long long address);
 const wchar_t *tui_scan_type_name(ScanType type);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
+int            tui_hex_digit_value(wchar_t c);
+int            tui_open_help(void);
 
 /* Process list filtering: list rebuilds `process_view` from `processes` using
    the current `process_filter` substring (case-insensitive). An empty needle
    produces the identity view (every process shown). */
 void           tui_set_process_filter(const wchar_t *needle);
-void           tui_clear_process_filter(void);
-int            tui_process_filter_active(void);
 DWORD          tui_next_wait_timeout(ULONGLONG now);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
 void           tui_exec_command(void);
+void           tui_clear_command(void);
+
+/* scan_job.c -- exclusively owned worker session, joined before target changes. */
+int            tui_scan_is_running(void);
+void           tui_start_scan(const ScanValue *value, int next);
+void           tui_poll_scan(void);
+void           tui_cancel_scan(void);
 
 #endif

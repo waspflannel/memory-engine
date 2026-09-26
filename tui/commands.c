@@ -10,25 +10,15 @@
 #include "tui_internal.h"
 #include "core/memory/memory.h"
 
-/* Command-prefix lengths, tied to the literals in tui_exec_command by name and
-   value: the number is the wide-char length of the corresponding L"<verb> ". */
-#define CMD_ATTACH_PREFIX    7  /* length of L"attach "     */
-#define CMD_READ_PREFIX      5  /* length of L"read "       */
-#define CMD_WRITE_PREFIX     6  /* length of L"write "      */
-#define CMD_SCAN_PREFIX      5  /* length of L"scan "       */
-#define CMD_NEXT_PREFIX      5  /* length of L"next "       */
-#define CMD_TYPE_PREFIX      5  /* length of L"type "       */
-#define CMD_STRENC_PREFIX    7  /* length of L"strenc "     */
-#define CMD_SEARCH_PREFIX    7  /* length of L"search "     */
-#define CMD_ADDENTRY_PREFIX  9  /* length of L"addentry "   */
-#define CMD_DELENTRY_PREFIX  9  /* length of L"delentry "   */
-#define CMD_ENTRYLABEL_PREFIX 11 /* length of L"entrylabel " */
-#define CMD_LOCKENTRY_PREFIX 10 /* length of L"lockentry "  */
-#define CMD_UNLOCKENTRY_PREFIX 12 /* length of L"unlockentry " */
-#define CMD_SAVEENTRY_PREFIX 10 /* length of L"saveentry "  */
-#define CMD_LOADENTRY_PREFIX 10 /* length of L"loadentry "  */
-
 /* Forward declarations — definitions at bottom of file. */
+typedef void (*CommandHandler)(const wchar_t *args);
+
+typedef struct {
+    const wchar_t *prefix;
+    CommandHandler handler;
+} Command;
+
+static void cmd_attach(const wchar_t *args);
 static void cmd_read(const wchar_t *args);
 static void cmd_write(const wchar_t *args);
 static void cmd_scan(const wchar_t *args);
@@ -43,13 +33,34 @@ static void cmd_lockentry(const wchar_t *args);
 static void cmd_unlockentry(const wchar_t *args);
 static void cmd_saveentry(const wchar_t *args);
 static void cmd_loadentry(const wchar_t *args);
+static void cmd_hex(const wchar_t *args);
+static void cmd_disasm(const wchar_t *args);
 static const wchar_t *skip_spaces(const wchar_t *text);
 static int parse_unsigned(const wchar_t *text, int base, unsigned long long maximum,
                           unsigned long long *value, const wchar_t **tail);
 static int parse_index(const wchar_t *text, size_t count, size_t *index, const wchar_t **tail);
 static int tail_is_empty(const wchar_t *text);
 static int narrow_ascii(const wchar_t *text, char *output, size_t capacity);
-static int hex_digit_value(wchar_t c);
+
+static const Command commands[] = {
+    { L"attach ", cmd_attach },
+    { L"read ", cmd_read },
+    { L"write ", cmd_write },
+    { L"scan ", cmd_scan },
+    { L"next ", cmd_next },
+    { L"type ", cmd_type },
+    { L"strenc ", cmd_strenc },
+    { L"search ", cmd_search },
+    { L"addentry ", cmd_addentry },
+    { L"delentry ", cmd_delentry },
+    { L"entrylabel ", cmd_entrylabel },
+    { L"lockentry ", cmd_lockentry },
+    { L"unlockentry ", cmd_unlockentry },
+    { L"saveentry ", cmd_saveentry },
+    { L"loadentry ", cmd_loadentry },
+    { L"hex ", cmd_hex },
+    { L"disasm ", cmd_disasm },
+};
 
 /* ---- Public API (order matches tui_internal.h) ---- */
 
@@ -59,20 +70,7 @@ void tui_exec_command(void)
 
     if (wcscmp(tui_state.cmd_buf, L"quit") == 0 || wcscmp(tui_state.cmd_buf, L"exit") == 0) {
         tui_state.running = FALSE;
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"attach ", CMD_ATTACH_PREFIX) == 0) {
-        unsigned long long parsed_pid = 0;
-        const wchar_t *tail = NULL;
-        if (!parse_unsigned(tui_state.cmd_buf + CMD_ATTACH_PREFIX, 10, UINT32_MAX,
-                            &parsed_pid, &tail) || parsed_pid == 0 || !tail_is_empty(tail)) {
-            tui_set_status(L"Invalid PID", TRUE);
-        } else {
-            tui_do_attach((DWORD)parsed_pid);
-        }
-        tui_state.cmd_len = 0;
+        tui_clear_command();
         return;
     }
 
@@ -83,123 +81,53 @@ void tui_exec_command(void)
         } else {
             tui_set_status(L"No process attached", TRUE);
         }
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"read ", CMD_READ_PREFIX) == 0) {
-        cmd_read(tui_state.cmd_buf + CMD_READ_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"write ", CMD_WRITE_PREFIX) == 0) {
-        cmd_write(tui_state.cmd_buf + CMD_WRITE_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"scan ", CMD_SCAN_PREFIX) == 0) {
-        cmd_scan(tui_state.cmd_buf + CMD_SCAN_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"next ", CMD_NEXT_PREFIX) == 0) {
-        cmd_next(tui_state.cmd_buf + CMD_NEXT_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"type ", CMD_TYPE_PREFIX) == 0) {
-        cmd_type(tui_state.cmd_buf + CMD_TYPE_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"strenc ", CMD_STRENC_PREFIX) == 0) {
-        cmd_strenc(tui_state.cmd_buf + CMD_STRENC_PREFIX);
-        tui_state.cmd_len = 0;
+        tui_clear_command();
         return;
     }
 
     /* `search <name>` filters the Processes panel to entries whose image name
        contains <name> as a case-insensitive substring. `search` alone clears
        any active filter and shows the full list again. */
-    if (wcsncmp(tui_state.cmd_buf, L"search ", CMD_SEARCH_PREFIX) == 0) {
-        cmd_search(tui_state.cmd_buf + CMD_SEARCH_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
     if (wcscmp(tui_state.cmd_buf, L"search") == 0) {
         cmd_search(L"");
-        tui_state.cmd_len = 0;
+        tui_clear_command();
         return;
     }
 
-    if (wcsncmp(tui_state.cmd_buf, L"addentry ", CMD_ADDENTRY_PREFIX) == 0) {
-        cmd_addentry(tui_state.cmd_buf + CMD_ADDENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"delentry ", CMD_DELENTRY_PREFIX) == 0) {
-        cmd_delentry(tui_state.cmd_buf + CMD_DELENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"entrylabel ", CMD_ENTRYLABEL_PREFIX) == 0) {
-        cmd_entrylabel(tui_state.cmd_buf + CMD_ENTRYLABEL_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"lockentry ", CMD_LOCKENTRY_PREFIX) == 0) {
-        cmd_lockentry(tui_state.cmd_buf + CMD_LOCKENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"unlockentry ", CMD_UNLOCKENTRY_PREFIX) == 0) {
-        cmd_unlockentry(tui_state.cmd_buf + CMD_UNLOCKENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"saveentry ", CMD_SAVEENTRY_PREFIX) == 0) {
-        cmd_saveentry(tui_state.cmd_buf + CMD_SAVEENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
-    }
-
-    if (wcsncmp(tui_state.cmd_buf, L"loadentry ", CMD_LOADENTRY_PREFIX) == 0) {
-        cmd_loadentry(tui_state.cmd_buf + CMD_LOADENTRY_PREFIX);
-        tui_state.cmd_len = 0;
-        return;
+    for (size_t i = 0; i < _countof(commands); i++) {
+        size_t prefix_length = wcslen(commands[i].prefix);
+        if (wcsncmp(tui_state.cmd_buf, commands[i].prefix, prefix_length) == 0) {
+            commands[i].handler(tui_state.cmd_buf + prefix_length);
+            tui_clear_command();
+            return;
+        }
     }
 
     if (wcscmp(tui_state.cmd_buf, L"help") == 0) {
-        const HelpBook *book = tui_help_book_for_panel(tui_state.panel);
-        if (!book) {
-            tui_set_status(L"No help for this panel", TRUE);
-        } else {
-            tui_state.help_book = book;
-            tui_state.help_open = 1;
-            tui_state.help_tab = 0;
-            tui_state.help_scroll = 0;
-        }
-        tui_state.cmd_len = 0;
+        if (!tui_open_help()) tui_set_status(L"No help for this panel", TRUE);
+        tui_clear_command();
         return;
     }
 
     wchar_t msg[STATUS_MSG_MAX];
     _snwprintf_s(msg, _countof(msg), _TRUNCATE, L"Unknown command: %s", tui_state.cmd_buf);
     tui_set_status(msg, TRUE);
-    tui_state.cmd_len = 0;
+    tui_clear_command();
 }
 
 /* ---- Static helpers ---- */
+
+static void cmd_attach(const wchar_t *args)
+{
+    unsigned long long parsed_pid = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_unsigned(args, 10, UINT32_MAX, &parsed_pid, &tail) || parsed_pid == 0 ||
+        !tail_is_empty(tail)) {
+        tui_set_status(L"Invalid PID", TRUE);
+    } else {
+        tui_do_attach((DWORD)parsed_pid);
+    }
+}
 
 static void cmd_read(const wchar_t *args)
 {
@@ -223,6 +151,13 @@ static void cmd_read(const wchar_t *args)
         wchar_t msg[256];
         swprintf_s(msg, _countof(msg), L"read failed: %S", process_error_string(err));
         tui_set_status(msg, TRUE);
+        return;
+    }
+
+    /* A long read belongs in the navigable hex view, not a clipped status row. */
+    if ((size_t)size * 3 > (size_t)(tui_state.width > 3 ? tui_state.width - 3 : 0)) {
+        tui_hexview_jump(address);
+        tui_set_status(L"Read succeeded; bytes are available in Hex View", FALSE);
         return;
     }
 
@@ -258,12 +193,14 @@ static void cmd_write(const wchar_t *args)
     for (;;) {
         p = skip_spaces(p);
         if (!*p) break;
-        if (byte_count == _countof(buf) || hex_digit_value(p[0]) < 0 ||
-            hex_digit_value(p[1]) < 0 || (p[2] && p[2] != L' ' && p[2] != L'\t')) {
+        int high = tui_hex_digit_value(p[0]);
+        int low = tui_hex_digit_value(p[1]);
+        if (byte_count == _countof(buf) || high < 0 || low < 0 ||
+            (p[2] && p[2] != L' ' && p[2] != L'\t')) {
             tui_set_status(L"usage: write <hex_address> <byte> [byte ...]", TRUE);
             return;
         }
-        buf[byte_count++] = (unsigned char)((hex_digit_value(p[0]) << 4) | hex_digit_value(p[1]));
+        buf[byte_count++] = (unsigned char)((high << 4) | low);
         p += 2;
     }
     if (byte_count == 0) {
@@ -287,75 +224,39 @@ static void cmd_write(const wchar_t *args)
 
 static void cmd_scan(const wchar_t *args)
 {
-    if (!tui_state.attached || !tui_state.scanner_inited) {
-        tui_set_status(L"No process attached", TRUE);
+    if (tui_scan_is_running()) {
+        tui_set_status(L"A scan is already running", TRUE);
         return;
     }
-
-    if (!tui_parse_scan_value(args, &tui_state.scanner.param)) {
+    ScanValue value = {0};
+    value.type = tui_state.scanner.param.type;
+    if (!tui_parse_scan_value(args, &value)) {
         tui_set_status(L"usage: scan <value>", TRUE);
         return;
     }
-    PlatformError err = scanner_first_scan(&tui_state.scanner);
-    if (err != PLATFORM_OK) {
-        wchar_t msg[256];
-        swprintf_s(msg, _countof(msg), L"first scan failed: %S", process_error_string(err));
-        tui_set_status(msg, TRUE);
-        return;
-    }
-
-    wchar_t msg[160];
-    if (tui_state.scanner.results.skipped_regions > 0) {
-        swprintf_s(msg, _countof(msg), L"First scan: %llu hits; %llu volatile region(s) ignored",
-                   (unsigned long long)tui_state.scanner.results.count,
-                   (unsigned long long)tui_state.scanner.results.skipped_regions);
-    } else {
-        swprintf_s(msg, _countof(msg), L"First scan: %llu hits",
-                   (unsigned long long)tui_state.scanner.results.count);
-    }
-    tui_set_status(msg, FALSE);
+    tui_start_scan(&value, FALSE);
 }
 
 static void cmd_next(const wchar_t *args)
 {
-    if (!tui_state.attached || !tui_state.scanner_inited) {
-        tui_set_status(L"No process attached", TRUE);
+    if (tui_scan_is_running()) {
+        tui_set_status(L"A scan is already running", TRUE);
         return;
     }
-    if (!tui_state.scanner.has_results) {
-        tui_set_status(L"Run `scan <value>` first", TRUE);
+    ScanValue value = {0};
+    value.type = tui_state.scanner.param.type;
+    if (!tui_parse_scan_value(args, &value)) {
+        tui_set_status(L"usage: next <value>", TRUE);
         return;
     }
-
-    ScanSession *s = &tui_state.scanner;
-
-    if (!tui_parse_scan_value(args, &s->param)) {
-        tui_set_status(L"usage: next <value>  (could not parse for current type)", TRUE);
-        return;
-    }
-
-    PlatformError err = scanner_next_scan(s);
-    if (err != PLATFORM_OK) {
-        wchar_t msg[256];
-        swprintf_s(msg, _countof(msg), L"next scan failed: %S", process_error_string(err));
-        tui_set_status(msg, TRUE);
-        return;
-    }
-
-    wchar_t msg[160];
-    if (s->results.unreadable_candidates > 0) {
-        swprintf_s(msg, _countof(msg), L"Next scan: %llu survivors; %llu unreadable candidate(s) removed",
-                   (unsigned long long)s->results.count,
-                   (unsigned long long)s->results.unreadable_candidates);
-    } else {
-        swprintf_s(msg, _countof(msg), L"Next scan: %llu survivors",
-                   (unsigned long long)s->results.count);
-    }
-    tui_set_status(msg, FALSE);
+    tui_start_scan(&value, TRUE);
 }
-
 static void cmd_type(const wchar_t *args)
 {
+    if (tui_scan_is_running()) {
+        tui_set_status(L"Wait for the scan to finish before changing type", TRUE);
+        return;
+    }
     if (!tui_state.attached || !tui_state.scanner_inited) {
         tui_set_status(L"No process attached", TRUE);
         return;
@@ -402,7 +303,7 @@ static void cmd_search(const wchar_t *args)
     while (*args == L' ') args++;
 
     if (*args == L'\0') {
-        tui_clear_process_filter();
+        tui_set_process_filter(L"");
         return;
     }
 
@@ -601,6 +502,39 @@ static void cmd_loadentry(const wchar_t *args)
                (unsigned long long)tui_state.address_table.count, filepath);
     tui_set_status(msg, FALSE);
 }
+static void cmd_hex(const wchar_t *args)
+{
+    if (!tui_state.attached) {
+        tui_set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    unsigned long long address = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || !tail_is_empty(tail)) {
+        tui_set_status(L"usage: hex <hex_address>", TRUE);
+        return;
+    }
+
+    tui_hexview_jump(address);
+}
+
+static void cmd_disasm(const wchar_t *args)
+{
+    if (!tui_state.attached) {
+        tui_set_status(L"No process attached", TRUE);
+        return;
+    }
+
+    unsigned long long address = 0;
+    const wchar_t *tail = NULL;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || !tail_is_empty(tail)) {
+        tui_set_status(L"usage: disasm <hex_address>", TRUE);
+        return;
+    }
+
+    tui_disasm_jump(address);
+}
 
 static const wchar_t *skip_spaces(const wchar_t *text)
 {
@@ -648,12 +582,4 @@ static int narrow_ascii(const wchar_t *text, char *output, size_t capacity)
     }
     output[length] = '\0';
     return 1;
-}
-
-static int hex_digit_value(wchar_t c)
-{
-    if (c >= L'0' && c <= L'9') return (int)(c - L'0');
-    if (c >= L'a' && c <= L'f') return (int)(c - L'a') + 10;
-    if (c >= L'A' && c <= L'F') return (int)(c - L'A') + 10;
-    return -1;
 }

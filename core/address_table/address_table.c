@@ -74,7 +74,6 @@ int addr_table_add(AddrTable *table, const char *label, ScanType type, uintptr_t
     strcpy_s(entry->label, ADDR_ENTRY_LABEL_MAX, label);
     entry->type = type;
     entry->address = address;
-    entry->value_width = scanner_type_width(type);
     table->count++;
     return (int)(table->count - 1);
 }
@@ -104,8 +103,8 @@ int addr_table_lock(AddrTable *table, size_t index, const void *lock_value)
         index >= table->count || !lock_value) return -1;
 
     AddrEntry *entry = &table->entries[index];
-    if (!type_is_supported(entry->type) || entry->value_width > ADDR_ENTRY_VALUE_MAX) return -1;
-    memcpy(entry->lock_value, lock_value, entry->value_width);
+    if (!type_is_supported(entry->type)) return -1;
+    memcpy(entry->lock_value, lock_value, scanner_type_width(entry->type));
     entry->locked = true;
     return 0;
 }
@@ -130,7 +129,7 @@ PlatformError addr_table_refresh(AddrTable *table)
     for (size_t i = 0; i < table->count; i++) {
         AddrEntry *entry = &table->entries[i];
         PlatformError err = memory_read(table->target, entry->address,
-                                        entry->current_value, entry->value_width);
+                                        entry->current_value, scanner_type_width(entry->type));
         entry->value_valid = err == PLATFORM_OK;
         if (err != PLATFORM_OK) {
             memset(entry->current_value, 0, sizeof(entry->current_value));
@@ -152,7 +151,7 @@ void addr_table_lock_write(AddrTable *table, bool *had_error, size_t *error_inde
         if (!entry->locked) continue;
 
         PlatformError err = memory_write(table->target, entry->address,
-                                         entry->lock_value, entry->value_width);
+                                         entry->lock_value, scanner_type_width(entry->type));
         if (err != PLATFORM_OK) {
             entry->locked = false;
             memset(entry->lock_value, 0, sizeof(entry->lock_value));
@@ -297,7 +296,7 @@ static int write_entry(FILE *file, const AddrEntry *entry)
                 entry->label, type_name, entry->address, entry->locked ? 1 : 0) < 0) return 0;
     if (entry->locked) {
         if (fputc(' ', file) == EOF) return 0;
-        for (unsigned short i = 0; i < entry->value_width; i++) {
+        for (unsigned short i = 0; i < scanner_type_width(entry->type); i++) {
             if (fprintf(file, "%02X", entry->lock_value[i]) < 0) return 0;
         }
     }
