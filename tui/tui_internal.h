@@ -16,6 +16,7 @@
 #include "core/address_table/address_table.h"
 #include "core/hexview/hexview.h"
 #include "core/disasm/disasm.h"
+#include "core/debugger/debugger.h"
 #include "tui/help.h"
 
 /* Sizes shared by the tui_state definition (tui.c) and the helpers that touch
@@ -83,6 +84,10 @@ typedef struct {
     ULONGLONG          disasm_last_refresh;
     int                disasm_window_valid;
 
+    Debugger          *debugger;
+    DebuggerState      debugger_state;
+    int                debugger_scroll;
+
     int             help_open;
     int             help_tab;
     int             help_scroll;
@@ -104,7 +109,8 @@ extern TuiState tui_state;
 /* helpers.c -- shared app state + scan-value parsing. */
 void           tui_set_status(const wchar_t *msg, int is_error);
 int            tui_refresh_process_list(void);
-void           tui_detach_target(void);
+int            tui_detach_target(void);
+int            tui_debugger_result(DebuggerError error, const wchar_t *success);
 int            tui_do_attach(DWORD pid);
 void           tui_attach_to_selected(void);
 void           tui_hexview_jump(unsigned long long address);

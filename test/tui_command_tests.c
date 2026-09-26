@@ -100,7 +100,26 @@ int main(void)
     run_command(L"disasm 100junk");
     check(tui_state.status_error, "disasm command rejects a trailing address suffix");
 
+    const wchar_t *invalid_debug_commands[] = {
+        L"swbreak 1234junk", L"swbreak -1", L"hwbreak 0 1234", L"hwbreak 1 1234junk",
+        L"hwbreak 4294967296 1234", L"delbreak 32", L"delbreak garbage",
+        L"debug extra", L"break extra", L"continue extra", L"undebug extra"
+    };
+    for (size_t i = 0; i < sizeof(invalid_debug_commands) / sizeof(invalid_debug_commands[0]); i++) {
+        run_command(invalid_debug_commands[i]);
+        check(tui_state.status_error && wcsncmp(tui_state.status_msg, L"usage:", 6) == 0,
+              "debugger command rejects malformed input before core calls");
+    }
+    run_command(L"continue");
+    check(tui_state.status_error && wcsstr(tui_state.status_msg, L"No debugger"),
+          "continue requires a debugger session");
+    run_command(L"debugger");
+    check(tui_state.status_error && wcsstr(tui_state.status_msg, L"Unknown command"),
+          "debug command does not consume a longer word sharing its prefix");
+
     tui_state.attached = FALSE;
+    run_command(L"debug");
+    check(tui_state.status_error && !tui_state.debugger, "debug requires an attached process");
     run_command(L"hex 1234");
     check(tui_state.status_error, "hex command requires an attached process");
     tui_state.attached = TRUE;

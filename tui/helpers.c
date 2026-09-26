@@ -82,6 +82,7 @@ DWORD tui_next_wait_timeout(ULONGLONG now)
     ULONGLONG refresh_due = tui_state.address_table_last_refresh + ADDR_TABLE_REFRESH_INTERVAL_MS;
     ULONGLONG lock_due = tui_state.address_table_last_lock + ADDR_TABLE_LOCK_INTERVAL_MS;
     ULONGLONG due = refresh_due < lock_due ? refresh_due : lock_due;
+    if (tui_state.debugger && now + 20 < due) due = now + 20;
     if (tui_state.panel == PANEL_HEXVIEW) {
         ULONGLONG hexview_due = tui_state.hexview_last_refresh + HEXVIEW_REFRESH_INTERVAL_MS;
         if (hexview_due < due) due = hexview_due;
@@ -93,8 +94,12 @@ DWORD tui_next_wait_timeout(ULONGLONG now)
     return now >= due ? 0 : (DWORD)(due - now);
 }
 
-void tui_detach_target(void)
+int tui_detach_target(void)
 {
+    if (tui_state.debugger &&
+        !tui_debugger_result(debugger_detach(&tui_state.debugger), L"Debugger detached")) return 0;
+    tui_state.debugger_state = (DebuggerState){0};
+    tui_state.debugger_scroll = 0;
     tui_cancel_scan();
     if (tui_state.scanner_inited) {
         scanner_session_destroy(&tui_state.scanner);
@@ -115,11 +120,25 @@ void tui_detach_target(void)
     tui_state.disasm_scroll = 0;
     tui_state.disasm_last_refresh = 0;
     tui_state.disasm_window_valid = FALSE;
+    return 1;
+}
+
+int tui_debugger_result(DebuggerError error, const wchar_t *success)
+{
+    if (error != DEBUGGER_OK) {
+        wchar_t message[STATUS_MSG_MAX];
+        swprintf_s(message, _countof(message), L"Debugger: %S", debugger_error_string(error));
+        tui_set_status(message, TRUE);
+        return 0;
+    }
+    if (tui_state.debugger) debugger_get_state(tui_state.debugger, &tui_state.debugger_state);
+    if (success) tui_set_status(success, FALSE);
+    return 1;
 }
 
 int tui_do_attach(DWORD pid)
 {
-    if (tui_state.attached) tui_detach_target();
+    if (tui_state.attached && !tui_detach_target()) return 0;
 
     process_enable_privilege();
 

@@ -12,6 +12,8 @@ static volatile LONG fixture[32] = { 19088743 };
 static HANDLE console_input;
 static HANDLE console_output;
 static HANDLE application;
+static HANDLE debug_target;
+static HANDLE debug_input;
 static wchar_t snapshot[(SCREEN_WIDTH + 1) * SCREEN_HEIGHT + 1];
 
 static int run_driver(const wchar_t *executable);
@@ -20,6 +22,8 @@ static int send_command(const wchar_t *command);
 static int wait_for_text(const wchar_t *text);
 static int read_screen(void);
 static void print_screen(void);
+static int start_debug_target(const wchar_t *application_path, DWORD *pid, unsigned int *thread_id,
+                              unsigned long long *code_address);
 
 /* Isolate console attachment in a helper process: the caller's console and
    redirected standard handles remain untouched. The job owns both children. */
@@ -143,10 +147,54 @@ static int run_driver(const wchar_t *executable)
     if (!send_command(L"invalid_fixture_command") || !wait_for_text(L"Unknown command:")) goto cleanup;
     step = "cleared command stays empty after status expires";
     if (!wait_for_text(L" > ") || wcsstr(snapshot, L"invalid_fixture_command")) goto cleanup;
+    DWORD target_pid;
+    unsigned int thread_id;
+    unsigned long long code_address;
+    step = "start independent debugger fixture";
+    if (!start_debug_target(executable, &target_pid, &thread_id, &code_address)) goto cleanup;
+    swprintf_s(command, _countof(command), L"attach %lu", target_pid);
+    step = "attach debugger fixture";
+    if (!send_command(command) || !wait_for_text(L"Attached to")) goto cleanup;
+    step = "debug command and initial register display";
+    if (!send_command(L"debug") || !wait_for_text(L"Paused  thread") ||
+        !wcsstr(snapshot, L"RAX") || !wcsstr(snapshot, L"RIP")) goto cleanup;
+    swprintf_s(command, _countof(command), L"swbreak %llX", code_address);
+    step = "set software breakpoint";
+    if (!send_command(command) || !wait_for_text(L"Software breakpoint 0")) goto cleanup;
+    step = "continue to software breakpoint";
+    if (!send_command(L"continue")) goto cleanup;
+    wchar_t expected_rip[40];
+    swprintf_s(expected_rip, _countof(expected_rip), L"RIP %016llX", code_address);
+    if (!wait_for_text(expected_rip)) goto cleanup;
+    step = "remove software breakpoint";
+    if (!send_command(L"delbreak 0") || !wait_for_text(L"Breakpoint removed")) goto cleanup;
+    swprintf_s(command, _countof(command), L"hwbreak %u %llX", thread_id, code_address);
+    step = "set hardware breakpoint";
+    if (!send_command(command) || !wait_for_text(L"Hardware breakpoint 0")) goto cleanup;
+    step = "continue to hardware breakpoint";
+    if (!send_command(L"continue") || !wait_for_text(L"Exception: 80000004") ||
+        !wcsstr(snapshot, expected_rip)) goto cleanup;
+    printf("Rendered 80x25 debugger screen after software and hardware hits:\n");
+    print_screen();
+    step = "remove hardware breakpoint and resume";
+    if (!send_command(L"delbreak 0") || !wait_for_text(L"Breakpoint removed") ||
+        !send_command(L"continue") || !wait_for_text(L"Running  thread")) goto cleanup;
+    step = "pause running target";
+    if (!send_command(L"break") || !wait_for_text(L"Paused  thread")) goto cleanup;
+    step = "detach debugger without closing target";
+    if (!send_command(L"undebug") || !wait_for_text(L"Debugger detached; target remains attached") ||
+        WaitForSingleObject(debug_target, 0) != WAIT_TIMEOUT) goto cleanup;
+    unsigned char restored_byte;
+    SIZE_T bytes_read;
+    if (!ReadProcessMemory(debug_target, (LPCVOID)(uintptr_t)code_address, &restored_byte, 1, &bytes_read) ||
+        bytes_read != 1 || restored_byte != 0xFF) goto cleanup;
+    step = "normal quit while debugger attached";
+    if (!send_command(L"debug") || !wait_for_text(L"Paused  thread")) goto cleanup;
     step = "quit through keyboard";
     if (!send_command(L"quit") || WaitForSingleObject(application, 5000) != WAIT_OBJECT_0) goto cleanup;
     DWORD exit_code;
     if (!GetExitCodeProcess(application, &exit_code) || exit_code != 0) goto cleanup;
+    if (WaitForSingleObject(debug_target, 0) != WAIT_TIMEOUT) goto cleanup;
     passed = 1;
 
 cleanup:
@@ -158,12 +206,64 @@ cleanup:
         TerminateProcess(application, 1);
         WaitForSingleObject(application, 5000);
     }
+    if (debug_input) CloseHandle(debug_input);
+    if (debug_target) {
+        if (WaitForSingleObject(debug_target, 2000) != WAIT_OBJECT_0) TerminateProcess(debug_target, 1);
+        CloseHandle(debug_target);
+    }
     if (console_input && console_input != INVALID_HANDLE_VALUE) CloseHandle(console_input);
     if (console_output && console_output != INVALID_HANDLE_VALUE) CloseHandle(console_output);
     FreeConsole();
     CloseHandle(application);
     printf("Console integration: %s\n", passed ? "passed" : "failed");
     return passed ? 0 : 1;
+}
+
+static int start_debug_target(const wchar_t *application_path, DWORD *pid, unsigned int *thread_id,
+                              unsigned long long *code_address)
+{
+    wchar_t path[MAX_PATH];
+    if (wcsncpy_s(path, _countof(path), application_path, _TRUNCATE) != 0) return 0;
+    wchar_t *filename = wcsrchr(path, L'\\');
+    if (!filename) filename = wcsrchr(path, L'/');
+    filename = filename ? filename + 1 : path;
+    if (wcscpy_s(filename, _countof(path) - (size_t)(filename - path), L"debugger_target.exe") != 0) return 0;
+    SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+    HANDLE input_read = NULL, output_read = NULL, output_write = NULL;
+    int started = 0;
+    if (!CreatePipe(&input_read, &debug_input, &security, 0) ||
+        !CreatePipe(&output_read, &output_write, &security, 0) ||
+        !SetHandleInformation(debug_input, HANDLE_FLAG_INHERIT, 0) ||
+        !SetHandleInformation(output_read, HANDLE_FLAG_INHERIT, 0)) goto done;
+    STARTUPINFOW startup = {0};
+    PROCESS_INFORMATION child = {0};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = input_read;
+    startup.hStdOutput = output_write;
+    startup.hStdError = output_write;
+    if (!CreateProcessW(path, NULL, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &startup, &child)) goto done;
+    debug_target = child.hProcess;
+    *pid = child.dwProcessId;
+    CloseHandle(child.hThread);
+    char info[128];
+    DWORD count;
+    size_t length = 0;
+    ULONGLONG deadline = GetTickCount64() + 5000;
+    while (length < sizeof(info) - 1 && GetTickCount64() < deadline) {
+        DWORD available;
+        if (!PeekNamedPipe(output_read, NULL, 0, NULL, &available, NULL)) break;
+        if (!available) { Sleep(10); continue; }
+        if (!ReadFile(output_read, info + length, 1, &count, NULL) || count != 1) break;
+        if (info[length++] == '\n') break;
+    }
+    info[length] = '\0';
+    started = sscanf_s(info, "%u %llx", thread_id, code_address) == 2;
+done:
+    if (input_read) CloseHandle(input_read);
+    if (output_read) CloseHandle(output_read);
+    if (output_write) CloseHandle(output_write);
+    return started;
 }
 
 static int send_key(WORD key, wchar_t character)
@@ -203,12 +303,15 @@ static int wait_for_text(const wchar_t *text)
 
 static int read_screen(void)
 {
+    wchar_t cells[SCREEN_WIDTH * SCREEN_HEIGHT];
+    DWORD read;
+    COORD origin = {0, 0};
+    /* Read one console frame; per-row calls can mix two different redraws. */
+    if (!ReadConsoleOutputCharacterW(console_output, cells, _countof(cells), origin, &read) ||
+        read != _countof(cells)) return 0;
     for (SHORT row = 0; row < SCREEN_HEIGHT; row++) {
-        COORD origin = {0, row};
-        DWORD read;
         wchar_t *line = snapshot + row * (SCREEN_WIDTH + 1);
-        if (!ReadConsoleOutputCharacterW(console_output, line, SCREEN_WIDTH, origin, &read) ||
-            read != SCREEN_WIDTH) return 0;
+        wmemcpy(line, cells + row * SCREEN_WIDTH, SCREEN_WIDTH);
         line[SCREEN_WIDTH] = L'\n';
     }
     snapshot[_countof(snapshot) - 1] = L'\0';

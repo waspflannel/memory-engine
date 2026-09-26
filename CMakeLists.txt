@@ -41,6 +41,7 @@ add_executable(memforge
     tui/help_books/address_table.c
     tui/help_books/hexview.c
     tui/help_books/disasm.c
+    tui/help_books/debugger.c
 )
 target_link_libraries(memforge PRIVATE memforge_core)
 
@@ -90,6 +91,7 @@ add_executable(tui_command_tests
     tui/help_books/address_table.c
     tui/help_books/hexview.c
     tui/help_books/disasm.c
+    tui/help_books/debugger.c
 )
 target_link_libraries(tui_command_tests PRIVATE memforge_core)
 
@@ -106,11 +108,12 @@ add_executable(tui_runtime_tests
     tui/help_books/address_table.c
     tui/help_books/hexview.c
     tui/help_books/disasm.c
+    tui/help_books/debugger.c
 )
 target_link_libraries(tui_runtime_tests PRIVATE memforge_core)
 
 add_executable(tui_console_tests test/tui_console_tests.c)
-add_dependencies(tui_console_tests memforge)
+add_dependencies(tui_console_tests memforge debugger_target)
 
 foreach(target memforge_zydis memforge_core memforge core_tests hexview_tests disasm_tests
                scanner_tests address_table_tests tui_command_tests tui_runtime_tests tui_console_tests
