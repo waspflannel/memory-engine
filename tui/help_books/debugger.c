@@ -1,26 +1,23 @@
 #include "tui/help.h"
 
 static const HelpEntry overview[] = {
-    { L"start", L"Attach a process first, then run debug. The initial Windows breakpoint pauses the process. Use continue to run and break to pause again." },
-    { L"software", L"While paused, swbreak <hex_address> replaces a code byte with INT3. The original instruction is restored and executed on resume, then the breakpoint is rearmed." },
-    { L"hardware", L"While paused, hwbreak <decimal_tid> <hex_address> sets an execution breakpoint on that thread only. The panel lists the thread and slot. At most four hardware slots are available per thread." },
-    { L"registers", L"Paused registers belong to the event thread shown at the top. Running or failed context reads do not display stale register values. This debugger supports native x64 targets." },
-    { L"cleanup", L"delbreak <index> removes a breakpoint while paused. undebug restores all patches and debug registers and resumes the target. detach and quit do the same before closing the process; failed cleanup retains the session for retry." },
-    { L"scope", L"Hardware breakpoints are execution-only. Conditional breakpoints, register editing, and user-controlled single stepping are not implemented." },
+    { L"start", L"Attach a process, select a numeric Scanner result or AddrTable entry and press k. Or enter watch <hex_address> <type>. One value is watched across all target threads." },
+    { L"change", L"The target pauses after a CPU write changes the watched bytes. Same-value writes continue automatically. External memory edits and address locks do not themselves trigger CPU watchpoints." },
+    { L"inspect", L"The screen shows before/after values, the stopped thread, registers and disassembly at its next instruction. RIP is after the write, not the exact writing instruction. Up/Down scrolls details." },
+    { L"stop watching", L"S or unwatch removes the watch and resumes the target. Ordinary memory access stays attached. D or detach removes the watch and disconnects from the target." },
+    { L"scope", L"Native x64 only. Numeric sizes 1, 2, 4 or 8 bytes; address must be aligned to that size. Strings/AOB are unsupported. A second watch is rejected. Failed cleanup keeps the session available for retry." },
 };
-
 static const HelpEntry keys[] = {
-    { L"Up / Down", L"Scroll registers and the breakpoint list" },
-    { L"Page Up/Down", L"Scroll one visible page" },
-    { L"d", L"Open disassembly at the paused instruction pointer when registers are valid" },
+    { L"C", L"Continue after a value change, retaining the watch" },
+    { L"S", L"Stop watching; keep memory access attached" },
+    { L"D", L"Detach from the target" },
+    { L"Up/Down, PgUp/PgDn", L"Scroll the value details, next instructions and registers" },
     { L"?", L"Open this help book" },
     { L"Esc / Tab", L"Return to the sidebar or cycle focus to the command bar" },
 };
-
 static const HelpPage pages[] = {
-    { L"Overview", L"Pause and inspect a native x64 process.", overview, HELP_COUNT(overview) },
+    { L"Overview", L"Watch one value and inspect changes.", overview, HELP_COUNT(overview) },
     { L"Commands", L"Commands available from the command bar.", tui_command_help_entries, TUI_COMMAND_HELP_COUNT },
     { L"Keys", L"Shortcuts when the Debugger panel is focused.", keys, HELP_COUNT(keys) },
 };
-
-const HelpBook tui_help_debugger = { L"Debugger Help", pages, HELP_COUNT(pages) };
+const HelpBook tui_help_debugger = { L"Value Watch Help", pages, HELP_COUNT(pages) };

@@ -19,35 +19,35 @@ ctest --test-dir ../build -C Release --output-on-failure
 `Tab` cycles between the sidebar, panel and command bar. `Esc` returns to the
 sidebar; `?` opens the current panel's help. Commands also work from the command bar.
 
-## Debugger
+## Watch a value
 
-Attach to a process first, then use these commands:
+Select a numeric Scanner result or Address Table entry and press **K**. MemForge
+watches that one value across the target's threads. When a target instruction
+writes different bytes, execution pauses and the Debugger panel shows the value
+before and after, the stopped thread's registers, and instructions at its RIP.
+Writes that leave the value unchanged are skipped automatically.
 
-| Command | Action |
-|---|---|
-| `debug` | Start debugging the selected target; pause at the initial attach event. |
-| `break` | Request a pause while the target runs. |
-| `continue` | Resume execution from a pause. |
-| `swbreak <hex_address>` | Set a persistent software execution breakpoint. |
-| `hwbreak <thread_id> <hex_address>` | Set a hardware execution breakpoint on one thread. |
-| `delbreak <index>` | Remove a breakpoint using its displayed index. |
-| `undebug` | Restore debugger changes and end the debug session. |
+Three actions sit at the bottom of the panel:
 
-Set and remove breakpoints while paused. The debugger panel displays the stopped
-thread, its general-purpose registers, RIP, RSP, flags, and breakpoint indices.
-Use arrows or Page Up/Down to scroll; `d` opens disassembly at the paused RIP.
-Software breakpoints temporarily replace one instruction byte with `INT3`; resume
-executes the original instruction and rearms the breakpoint. Hardware breakpoints
-use up to four available debug-register slots per thread and leave code unchanged.
+- **C — Continue:** resume and wait for the next change.
+- **S — Stop watching:** remove the watch and resume; keep the process attached
+  for scanning and memory editing.
+- **D — Detach:** remove the watch, resume, and disconnect from the process.
 
-Debugger support is limited to native x64 targets. Hardware breakpoints apply only
-to the specified thread; they are execution breakpoints, not data watchpoints.
-The session tracks at most 32 breakpoints. Debugger commands run on the UI thread
-and events are polled without blocking input. Detach and quit restore modified
-bytes and debug-register slots before releasing the target. A cleanup error keeps
-the session available for retry and reports the failure.
+The watch starts automatically; there is no separate debugger attach, thread ID,
+execution address, or breakpoint list to manage. Arrow keys and Page Up/Down
+scroll the information if the terminal is small. `?` opens help.
 
-The debugger regression test launches its own hidden target with a known machine
-instruction, checks real breakpoint hits and register values, then verifies that
-the process continues after cleanup. Other tests cover the existing memory tools
-and exercise the actual executable through console keyboard events.
+From the command bar, use `watch <hex_address> <type>`, `continue`, `unwatch`, or
+`detach`. Numeric types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`,
+`f32`, and `f64`. Only one watch is active at a time; stop it before choosing another.
+
+This supports native x64 targets and naturally aligned values of 1, 2, 4, or 8
+bytes. Strings and byte arrays are not supported. A data watch stops **after** a
+write: displayed RIP identifies the next instruction, not necessarily the exact
+instruction that performed the write. Changes made externally through memory
+editing are not target CPU writes and do not trigger the watch.
+
+The watch leaves target code unchanged. Stop, detach, and quit restore the debug
+register slots it used; cleanup failures retain the session and report an error.
+The regression suite uses its own target process and real console keyboard input.

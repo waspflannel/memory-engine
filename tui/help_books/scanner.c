@@ -38,6 +38,7 @@ static const HelpEntry workflow_entries[] = {
 };
 
 static const HelpEntry scanner_keys_entries[] = {
+    { L"k", L"Watch the selected numeric value; pause when a target CPU write changes it" },
     { L"Up / Down", L"Move selection cursor through scan results" },
     { L"r",        L"Read the selected address -- opens the command bar pre-filled with `read <addr> ` (type the byte count, 1-128, then Enter)" },
     { L"w",        L"Write to the selected address -- opens the command bar pre-filled with `write <addr> ` (type hex byte pairs, then Enter)" },
