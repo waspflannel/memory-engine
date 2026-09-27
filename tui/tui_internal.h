@@ -121,7 +121,6 @@ int            tui_do_attach(DWORD pid);
 void           tui_attach_to_selected(void);
 void           tui_hexview_jump(unsigned long long address);
 void           tui_disasm_jump(unsigned long long address);
-const wchar_t *tui_scan_type_name(ScanType type);
 void           tui_format_numeric_value(wchar_t *output, size_t capacity, ScanType type, const unsigned char *bytes);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
 int            tui_hex_digit_value(wchar_t c);

@@ -95,7 +95,7 @@ void tui_draw_debugger(Screen *screen, int x, int top, int bottom)
                  memcmp(state->before, state->after, state->size) != 0 ? L"Value changed - paused" : L"Watch paused") :
                  state->watching ? L"Watching for changes" : L"Starting watch...");
         swprintf_s(lines[count++], _countof(lines[0]), L"Address: %016llX", state->address);
-        swprintf_s(lines[count++], _countof(lines[0]), L"Type: %s", tui_scan_type_name(tui_state.debugger_type));
+        swprintf_s(lines[count++], _countof(lines[0]), L"Type: %S", scanner_type_name(tui_state.debugger_type));
         if (state->value_valid) {
             wchar_t value[64];
             tui_format_numeric_value(value, _countof(value), tui_state.debugger_type, state->before);

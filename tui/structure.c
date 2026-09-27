@@ -79,8 +79,8 @@ void tui_structure_draw(Screen *screen, int x, int top, int bottom)
             tui_format_numeric_value(value, _countof(value), field->type, window.bytes + field->offset);
         else wcscpy_s(value, _countof(value), L"unreadable");
         colors[count] = modified ? changed : normal;
-        swprintf_s(lines[count++], _countof(lines[0]), L"%c +%04zX %s (%s): %s", modified ? L'*' : L' ',
-                   field->offset, field->label, tui_scan_type_name(field->type), value);
+        swprintf_s(lines[count++], _countof(lines[0]), L"%c +%04zX %s (%S): %s", modified ? L'*' : L' ',
+                   field->offset, field->label, scanner_type_name(field->type), value);
     }
     wcscpy_s(lines[count], _countof(lines[0]), L"Offset | Bytes | i32 | f32");
     colors[count++] = normal;

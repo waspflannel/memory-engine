@@ -348,8 +348,8 @@ static void draw_scanner_panel(Screen *screen)
 
     const wchar_t *enc = s->param.type == SCAN_TYPE_STRING
         ? (tui_state.string_enc == 1 ? L"utf16" : L"ascii") : L"-";
-    swprintf_s(line, _countof(line), L"Scanner -- type: %s  exact  enc: %s",
-               tui_scan_type_name(s->param.type), enc);
+    swprintf_s(line, _countof(line), L"Scanner -- type: %S  exact  enc: %s",
+               scanner_type_name(s->param.type), enc);
     screen_text(screen, main_x, row++, line, s_attr_normal);
 
     /* Hex byte dump of the current param (works for every type). */
@@ -502,8 +502,8 @@ static void draw_address_table_panel(Screen *screen)
         }
 
         wchar_t line[256];
-        const wchar_t *type_name = tui_scan_type_name(entry->type);
-        swprintf_s(line, _countof(line), L" [%s] %-20S  %-6s  0x%llX  %s",
+        const char *type_name = scanner_type_name(entry->type);
+        swprintf_s(line, _countof(line), L" [%s] %-20S  %-6S  0x%llX  %s",
                    lock_char, entry->label, type_name,
                    (unsigned long long)entry->address, value_str);
 
@@ -989,8 +989,8 @@ static void handle_key(WORD vk, WCHAR ch)
                 swprintf_s(prompt, _countof(prompt), L"0x%llX", addr);
                 tui_set_status(prompt, FALSE);
                 /* Signal to command handler that next command is addentry from scan */
-                prefill_command(L"addentry %llX %s ", addr,
-                                tui_scan_type_name(tui_state.scanner.param.type));
+                prefill_command(L"addentry %llX %S ", addr,
+                                scanner_type_name(tui_state.scanner.param.type));
             } else if (ch == L'r' && tui_state.scanner.has_results &&
                        (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
                 unsigned long long addr = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
@@ -1010,13 +1010,8 @@ static void handle_key(WORD vk, WCHAR ch)
                 else tui_structure_open(entry->address, 256);
             } else if (vk == VK_UP && tui_state.address_table_selected > 0) {
                 tui_state.address_table_selected--;
-                if (tui_state.address_table_selected < tui_state.address_table_scroll)
-                    tui_state.address_table_scroll = tui_state.address_table_selected;
             } else if (vk == VK_DOWN && tui_state.address_table_selected + 1 < (int)count) {
                 tui_state.address_table_selected++;
-                int vis_rows = (tui_state.height - 4) - CONTENT_START;
-                if (tui_state.address_table_selected >= tui_state.address_table_scroll + vis_rows)
-                    tui_state.address_table_scroll = tui_state.address_table_selected - vis_rows + 1;
             } else if (ch == L'd' && count > 0) {
                 addr_table_remove(&tui_state.address_table, (size_t)tui_state.address_table_selected);
                 if (tui_state.address_table_selected >= (int)count - 1 && tui_state.address_table_selected > 0)
@@ -1140,13 +1135,9 @@ static void handle_key(WORD vk, WCHAR ch)
                 }
             } else if (vk == VK_UP && tui_state.disasm_selected > 0) {
                 tui_state.disasm_selected--;
-                if (tui_state.disasm_selected < tui_state.disasm_scroll)
-                    tui_state.disasm_scroll = tui_state.disasm_selected;
             } else if (vk == VK_DOWN && count > 0) {
                 if (tui_state.disasm_selected + 1 < count) {
                     tui_state.disasm_selected++;
-                    if (tui_state.disasm_selected >= tui_state.disasm_scroll + (size_t)visible_rows)
-                        tui_state.disasm_scroll = tui_state.disasm_selected - (size_t)visible_rows + 1;
                 } else {
                     const DisasmInstruction *last = &tui_state.disasm_result.instructions[count - 1];
                     if (last->address <= ULLONG_MAX - last->length) {
@@ -1159,14 +1150,10 @@ static void handle_key(WORD vk, WCHAR ch)
                 size_t step = (size_t)visible_rows;
                 tui_state.disasm_selected = tui_state.disasm_selected >= step
                     ? tui_state.disasm_selected - step : 0;
-                if (tui_state.disasm_selected < tui_state.disasm_scroll)
-                    tui_state.disasm_scroll = tui_state.disasm_selected;
             } else if (vk == VK_NEXT && count > 0) {
                 size_t step = (size_t)visible_rows;
                 size_t selected = tui_state.disasm_selected + step;
                 tui_state.disasm_selected = selected < count ? selected : count - 1;
-                if (tui_state.disasm_selected >= tui_state.disasm_scroll + (size_t)visible_rows)
-                    tui_state.disasm_scroll = tui_state.disasm_selected - (size_t)visible_rows + 1;
             }
         }
         if (tui_state.panel == PANEL_DEBUGGER) tui_debugger_key(vk, ch);

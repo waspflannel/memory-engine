@@ -207,27 +207,13 @@ static void cmd_write(const wchar_t *args)
         return;
     }
 
-    unsigned char buf[128];
-    size_t byte_count = 0;
-    for (;;) {
-        p = skip_spaces(p);
-        if (!*p) break;
-        int high = tui_hex_digit_value(p[0]);
-        int low = tui_hex_digit_value(p[1]);
-        if (byte_count == _countof(buf) || high < 0 || low < 0 ||
-            (p[2] && p[2] != L' ' && p[2] != L'\t')) {
-            tui_set_status(L"usage: write <hex_address> <byte> [byte ...]", TRUE);
-            return;
-        }
-        buf[byte_count++] = (unsigned char)((high << 4) | low);
-        p += 2;
-    }
-    if (byte_count == 0) {
+    ScanValue value = {.type = SCAN_TYPE_AOB};
+    if (!tui_parse_scan_value(p, &value) || value.width > 128) {
         tui_set_status(L"usage: write <hex_address> <byte> [byte ...]", TRUE);
         return;
     }
 
-    PlatformError err = memory_write(&tui_state.target, address, buf, byte_count);
+    PlatformError err = memory_write(&tui_state.target, address, value.bytes, value.width);
     if (err != PLATFORM_OK) {
         wchar_t msg[256];
         swprintf_s(msg, _countof(msg), L"write failed: %S", process_error_string(err));
@@ -237,7 +223,7 @@ static void cmd_write(const wchar_t *args)
 
     wchar_t msg[256];
     swprintf_s(msg, _countof(msg), L"Wrote %llu byte(s) to 0x%llX",
-               (unsigned long long)byte_count, address);
+               (unsigned long long)value.width, address);
     tui_set_status(msg, FALSE);
 }
 
@@ -295,7 +281,7 @@ static void cmd_type(const wchar_t *args)
     scanner_session_init(&tui_state.scanner, &tui_state.target, type);
 
     wchar_t msg[64];
-    swprintf_s(msg, _countof(msg), L"Type: %s", tui_scan_type_name(type));
+    swprintf_s(msg, _countof(msg), L"Type: %S", scanner_type_name(type));
     tui_set_status(msg, FALSE);
 }
 

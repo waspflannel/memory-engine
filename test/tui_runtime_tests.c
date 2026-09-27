@@ -36,6 +36,11 @@ static void test_selection_and_commands(void)
     tui_state.scanner.results.addresses = calloc(30, sizeof(unsigned long long));
     check(tui_state.scanner.results.addresses != NULL, "allocate selected-result fixture");
     if (!tui_state.scanner.results.addresses) return;
+    unsigned char code[30];
+    memset(code, 0x90, sizeof(code));
+    check(disasm_decode_bytes(code, sizeof(code), 0x1000, &tui_state.disasm_result) == PLATFORM_OK,
+          "decode instructions for scrolling fixture");
+    tui_state.disasm_window_valid = TRUE;
     const int sizes[][2] = {{80, 25}, {40, 10}, {40, 12}, {120, 40}};
     for (size_t i = 0; i < _countof(sizes); i++) {
         tui_state.width = sizes[i][0];
@@ -55,6 +60,20 @@ static void test_selection_and_commands(void)
         draw_address_table_panel(&screen);
         draw_command(&screen);
         check(selection_visible(&screen), "new address-table selection follows scrolling and resizing");
+        const int panels[] = {PANEL_ADDRTABLE, PANEL_DISASM};
+        const WORD keys[] = {VK_DOWN, VK_UP, VK_NEXT, VK_PRIOR};
+        for (size_t panel = 0; panel < _countof(panels); panel++) {
+            tui_state.panel = panels[panel];
+            tui_state.address_table_selected = tui_state.address_table_scroll = 0;
+            tui_state.disasm_selected = tui_state.disasm_scroll = 0;
+            for (size_t key = 0; key < _countof(keys); key++) {
+                if (panel == 0 && key >= 2) break; /* Address table uses arrows only. */
+                for (int repeat = 0; repeat < (key < 2 ? 16 : 1); repeat++) handle_key(keys[key], 0);
+                screen_clear(&screen, s_attr_normal);
+                draw_main_panel(&screen);
+                check(selection_visible(&screen), "batched arrows and page keys keep the selected row visible");
+            }
+        }
         screen_free(&screen);
     }
 

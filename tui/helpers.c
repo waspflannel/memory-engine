@@ -215,15 +215,6 @@ void tui_disasm_jump(unsigned long long address)
     tui_state.sidebar_idx = PANEL_DISASM;
 }
 
-const wchar_t *tui_scan_type_name(ScanType type)
-{
-    static wchar_t name[16];
-    const char *canonical = scanner_type_name(type);
-    size_t converted = 0;
-    if (!canonical || mbstowcs_s(&converted, name, _countof(name), canonical, _TRUNCATE) != 0) return L"?";
-    return name;
-}
-
 void tui_format_numeric_value(wchar_t *output, size_t capacity, ScanType type, const unsigned char *bytes)
 {
 #define VALUE(kind, format) { kind value; memcpy(&value, bytes, sizeof(value)); swprintf_s(output, capacity, format, value); break; }

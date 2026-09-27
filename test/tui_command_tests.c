@@ -73,17 +73,22 @@ int main(void)
 
     unsigned char bytes[2] = {0};
     wchar_t write_command[128];
-    swprintf_s(write_command, sizeof(write_command) / sizeof(write_command[0]), L"write %llX 90 91",
+    swprintf_s(write_command, sizeof(write_command) / sizeof(write_command[0]), L"write %llX 90 \t91 ",
                (unsigned long long)(UINT_PTR)bytes);
     run_command(write_command);
     check(bytes[0] == 0x90 && bytes[1] == 0x91,
-          "write accepts documented whitespace-separated byte pairs");
+          "write accepts space/tab-separated byte pairs and trailing whitespace");
 
     wchar_t invalid_write[128];
-    swprintf_s(invalid_write, sizeof(invalid_write) / sizeof(invalid_write[0]), L"write %llX 9091",
-               (unsigned long long)(UINT_PTR)bytes);
-    run_command(invalid_write);
-    check(tui_state.status_error, "undocumented contiguous write bytes are rejected");
+    const wchar_t *invalid_bytes[] = {L"", L"9091", L"00 0", L"00 GG", L"00 01junk", L"??", L"0x90"};
+    for (size_t i = 0; i < _countof(invalid_bytes); i++) {
+        swprintf_s(invalid_write, _countof(invalid_write), L"write %llX %s",
+                   (unsigned long long)(UINT_PTR)bytes, invalid_bytes[i]);
+        run_command(invalid_write);
+        check(tui_state.status_error && wcsstr(tui_state.status_msg, L"usage: write") &&
+              bytes[0] == 0x90 && bytes[1] == 0x91,
+              "malformed write bytes are rejected before any target mutation");
+    }
 
     run_command(L"read 1234 129");
     check(tui_state.status_error && tui_state.cmd_len == 0,
