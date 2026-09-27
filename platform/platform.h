@@ -37,6 +37,7 @@ typedef struct {
 
 typedef struct {
     unsigned long long base;
+    size_t             size;
     wchar_t            name[PLATFORM_NAME_MAX];
 } PlatformModuleInfo;
 

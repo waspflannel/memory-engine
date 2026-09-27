@@ -227,7 +227,12 @@ PlatformError platform_get_main_module(void *handle, PlatformModuleInfo *info)
         return PLATFORM_ERR_MODULE_FAILED;
     }
 
-    info->base = (unsigned long long)(UINT_PTR)modules[0];
+    MODULEINFO module;
+    if (!GetModuleInformation((HANDLE)handle, modules[0], &module, sizeof(module))) {
+        return PLATFORM_ERR_MODULE_FAILED;
+    }
+    info->base = (unsigned long long)(UINT_PTR)module.lpBaseOfDll;
+    info->size = module.SizeOfImage;
 
     DWORD nameLen = GetModuleBaseNameW((HANDLE)handle, modules[0], info->name, PLATFORM_NAME_MAX);
     if (nameLen == 0) {
