@@ -34,9 +34,7 @@ target_include_directories(memforge_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(memforge_core PUBLIC /experimental:c11atomics)
 target_link_libraries(memforge_core PUBLIC psapi memforge_zydis)
 
-add_executable(memforge
-    tui/main.c
-    tui/tui.c
+set(MEMFORGE_TUI_SOURCES
     tui/commands.c
     tui/debugger.c
     tui/injection.c
@@ -55,6 +53,7 @@ add_executable(memforge
     tui/help_books/debugger.c
     tui/help_books/tools.c
 )
+add_executable(memforge tui/main.c tui/tui.c ${MEMFORGE_TUI_SOURCES})
 target_link_libraries(memforge PRIVATE memforge_core)
 
 add_executable(test_target
@@ -103,45 +102,13 @@ target_link_libraries(address_table_tests PRIVATE memforge_core)
 
 add_executable(tui_command_tests
     test/tui_command_tests.c
-    tui/commands.c
-    tui/debugger.c
-    tui/injection.c
-    tui/pointers.c
-    tui/structure.c
-    tui/render.c
-    tui/helpers.c
-    tui/scan_job.c
-    tui/help.c
-    tui/help_books/commands.c
-    tui/help_books/processes.c
-    tui/help_books/scanner.c
-    tui/help_books/address_table.c
-    tui/help_books/hexview.c
-    tui/help_books/disasm.c
-    tui/help_books/debugger.c
-    tui/help_books/tools.c
+    ${MEMFORGE_TUI_SOURCES}
 )
 target_link_libraries(tui_command_tests PRIVATE memforge_core)
 
 add_executable(tui_runtime_tests
     test/tui_runtime_tests.c
-    tui/commands.c
-    tui/debugger.c
-    tui/injection.c
-    tui/pointers.c
-    tui/structure.c
-    tui/helpers.c
-    tui/scan_job.c
-    tui/render.c
-    tui/help.c
-    tui/help_books/commands.c
-    tui/help_books/processes.c
-    tui/help_books/scanner.c
-    tui/help_books/address_table.c
-    tui/help_books/hexview.c
-    tui/help_books/disasm.c
-    tui/help_books/debugger.c
-    tui/help_books/tools.c
+    ${MEMFORGE_TUI_SOURCES}
 )
 target_link_libraries(tui_runtime_tests PRIVATE memforge_core)
 
