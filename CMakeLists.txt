@@ -16,6 +16,7 @@ add_library(memforge_core STATIC
     core/injector/injector.c
     core/pointer_scan/pointer_scan.c
     core/pointer_scan/index.c
+    core/structure/structure.c
     core/scanner/scanner.c
     core/address_table/address_table.c
     platform/platform.c
@@ -70,6 +71,9 @@ add_executable(pointer_target test/pointer_target.c)
 add_executable(pointer_tests test/pointer_tests.c)
 target_link_libraries(pointer_tests PRIVATE memforge_core)
 add_dependencies(pointer_tests pointer_target)
+
+add_executable(structure_tests test/structure_tests.c)
+target_link_libraries(structure_tests PRIVATE memforge_core)
 
 add_executable(core_tests
     test/core_tests.c
@@ -137,7 +141,7 @@ add_dependencies(tui_console_tests memforge debugger_target)
 
 foreach(target memforge_zydis memforge_core memforge core_tests hexview_tests disasm_tests
                scanner_tests address_table_tests tui_command_tests tui_runtime_tests tui_console_tests
-               debugger_target debugger_tests injector_fixture injector_tests pointer_target pointer_tests)
+               debugger_target debugger_tests injector_fixture injector_tests pointer_target pointer_tests structure_tests)
     target_compile_options(${target} PRIVATE /W4 /WX /wd5105)
 endforeach()
 target_compile_options(test_target PRIVATE /W4 /WX)
@@ -168,3 +172,4 @@ add_test(NAME injector_tests COMMAND injector_tests WORKING_DIRECTORY $<TARGET_F
 set_tests_properties(injector_tests PROPERTIES TIMEOUT 30)
 add_test(NAME pointer_tests COMMAND pointer_tests WORKING_DIRECTORY $<TARGET_FILE_DIR:pointer_tests>)
 set_tests_properties(pointer_tests PROPERTIES TIMEOUT 30)
+add_test(NAME structure_tests COMMAND structure_tests)
