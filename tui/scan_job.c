@@ -24,7 +24,7 @@ int tui_scan_is_running(void)
 
 void tui_start_scan(const ScanValue *value, int next)
 {
-    if (tui_scan_is_running()) {
+    if (tui_scan_is_running() || tui_pointer_is_running()) {
         tui_set_status(L"A scan is already running", TRUE);
         return;
     }

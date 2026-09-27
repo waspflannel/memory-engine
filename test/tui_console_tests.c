@@ -9,6 +9,7 @@
 #define SCREEN_HEIGHT 25
 
 static volatile LONG fixture[32] = { 19088743 };
+__declspec(align(8)) static volatile LONG *volatile fixture_pointer = fixture;
 static HANDLE console_input;
 static HANDLE console_output;
 static HANDLE application;
@@ -120,7 +121,7 @@ static int run_driver(const wchar_t *executable)
     if (!wait_for_text(L"MemForge")) goto cleanup;
     step = "detached read error";
     if (!send_command(L"read 0 4") || !wait_for_text(L" No process attached")) goto cleanup;
-    wchar_t command[128];
+    wchar_t command[MAX_PATH + 32];
     swprintf_s(command, _countof(command), L"attach %lu", GetCurrentProcessId());
     step = "attach to test fixture";
     if (!send_command(command) || !wait_for_text(L"Attached to")) goto cleanup;
@@ -143,6 +144,49 @@ static int run_driver(const wchar_t *executable)
         !wcsstr(snapshot, L"Hex View  0x") || !wcsstr(snapshot, L"67 45 23 01")) goto cleanup;
     printf("Rendered 80x25 screen after attach, scan, save, lock, and 128-byte read:\n");
     print_screen();
+    step = "structure opens and accepts typed field";
+    swprintf_s(command, _countof(command), L"structure %llX 128", (unsigned long long)(uintptr_t)fixture_pointer);
+    if (!send_command(command) || !wait_for_text(L"Structure opened") ||
+        !send_command(L"field 4 u32 score") || !wait_for_text(L"Structure field saved")) goto cleanup;
+    fixture[1] = 42;
+    if (!send_key(VK_ESCAPE, 0) || !send_key(VK_TAB, 0) || !send_key(0, L'r') ||
+        !wait_for_text(L"score (u32): 42") || !wcsstr(snapshot, L"* +0004")) goto cleanup;
+    printf("Rendered structure inspection after changing a labelled field:\n");
+    print_screen();
+    step = "pointer scan and resolve through static executable root";
+    swprintf_s(command, _countof(command), L"pointers %llX 1 0", (unsigned long long)(uintptr_t)fixture);
+    if (!send_command(command) || !wait_for_text(L"Pointers:") || wcsstr(snapshot, L"Pointers: 0 paths") ||
+        !send_key(0, L'r') || !wait_for_text(L"Pointer resolved")) goto cleanup;
+    printf("Rendered pointer path results:\n");
+    print_screen();
+    step = "pointer path and actions remain usable at 40 by 10";
+    COORD narrow_size = {40, 10};
+    if (!SetConsoleWindowInfo(console_output, TRUE, &small) ||
+        !SetConsoleScreenBufferSize(console_output, narrow_size)) goto cleanup;
+    for (int i = 0; i < 32; i++) if (!send_key(VK_RIGHT, 0)) goto cleanup;
+    wchar_t destination[32];
+    swprintf_s(destination, _countof(destination), L"%llX", (unsigned long long)(uintptr_t)fixture);
+    if (!wait_for_text(destination) || !wcsstr(snapshot, L"[R] Resolve [Enter] Hex")) goto cleanup;
+    printf("Rendered narrow pointer view after horizontal scrolling:\n");
+    print_screen();
+    if (!SetConsoleScreenBufferSize(console_output, size) ||
+        !SetConsoleWindowInfo(console_output, TRUE, &window)) goto cleanup;
+    step = "pointer scan cancellation preserves session paths across detach";
+    if (!send_command(command) || !send_command(L"detach") || !wait_for_text(L"[No process attached]")) goto cleanup;
+    swprintf_s(command, _countof(command), L"attach %lu", GetCurrentProcessId());
+    if (!send_command(command) || !wait_for_text(L"Attached to") ||
+        !send_key(VK_ESCAPE, 0) || !send_key(VK_TAB, 0) || !send_key(0, L'r') ||
+        !wait_for_text(L"Pointer resolved")) goto cleanup;
+    step = "standard DLL injection command completes";
+    wchar_t dll[MAX_PATH];
+    wcscpy_s(dll, _countof(dll), executable);
+    wchar_t *filename = wcsrchr(dll, L'\\');
+    if (!filename) filename = wcsrchr(dll, L'/');
+    if (!filename) goto cleanup;
+    wcscpy_s(filename + 1, _countof(dll) - (size_t)(filename + 1 - dll), L"injector_fixture.dll");
+    swprintf_s(command, _countof(command), L"inject \"%s\"", dll);
+    if (!send_command(command) || !wait_for_text(L"DLL loaded at")) goto cleanup;
+    printf("Standard DLL injection command completed in the attached fixture.\n");
     step = "invalid command error";
     if (!send_command(L"invalid_fixture_command") || !wait_for_text(L"Unknown command:")) goto cleanup;
     step = "cleared command stays empty after status expires";
@@ -321,15 +365,19 @@ static int read_screen(void)
     wchar_t cells[SCREEN_WIDTH * SCREEN_HEIGHT];
     DWORD read;
     COORD origin = {0, 0};
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (!GetConsoleScreenBufferInfo(console_output, &info)) return 0;
+    int width = info.dwSize.X, height = info.dwSize.Y;
+    if (width < 1 || width > SCREEN_WIDTH || height < 1 || height > SCREEN_HEIGHT) return 0;
+    DWORD count = (DWORD)(width * height);
     /* Read one console frame; per-row calls can mix two different redraws. */
-    if (!ReadConsoleOutputCharacterW(console_output, cells, _countof(cells), origin, &read) ||
-        read != _countof(cells)) return 0;
-    for (SHORT row = 0; row < SCREEN_HEIGHT; row++) {
-        wchar_t *line = snapshot + row * (SCREEN_WIDTH + 1);
-        wmemcpy(line, cells + row * SCREEN_WIDTH, SCREEN_WIDTH);
-        line[SCREEN_WIDTH] = L'\n';
+    if (!ReadConsoleOutputCharacterW(console_output, cells, count, origin, &read) || read != count) return 0;
+    for (int row = 0; row < height; row++) {
+        wchar_t *line = snapshot + row * (width + 1);
+        wmemcpy(line, cells + row * width, (size_t)width);
+        line[width] = L'\n';
     }
-    snapshot[_countof(snapshot) - 1] = L'\0';
+    snapshot[height * (width + 1)] = L'\0';
     return 1;
 }
 

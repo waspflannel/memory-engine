@@ -17,6 +17,7 @@ static const HelpEntry addr_lock_entries[] = {
 };
 
 static const HelpEntry addr_keys_entries[] = {
+    { L"P / I", L"Find pointer paths to the selected address / inspect its structure" },
     { L"k", L"Watch the selected numeric value; pause when a target CPU write changes it" },
     { L"Up / Down", L"Move selection cursor through entries" },
     { L"d",         L"Delete the selected entry" },

@@ -110,6 +110,16 @@ int main(void)
         check(tui_state.status_error && wcsncmp(tui_state.status_msg, L"usage:", 6) == 0,
               "watch command rejects malformed input before core calls");
     }
+    const wchar_t *invalid_tools[] = {
+        L"pointers 1234 0", L"pointers 1234 4", L"pointers 1234 2 4097", L"pointers -1",
+        L"pointerfilter 1234 junk", L"structure 1234 0", L"structure 1234 257",
+        L"structure 1234 4 junk", L"field -1 i32 label", L"field 100 i32 label",
+        L"field 0 string label", L"field 0 i32", L"inject \"\""
+    };
+    for (size_t i = 0; i < _countof(invalid_tools); i++) {
+        run_command(invalid_tools[i]);
+        check(tui_state.status_error && tui_state.cmd_len == 0, "invalid memory-tool command fails and clears input");
+    }
     run_command(L"watch 1234 string");
     check(tui_state.status_error && !tui_state.debugger, "watch rejects nonnumeric values");
     run_command(L"continue");

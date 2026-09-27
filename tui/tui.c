@@ -40,6 +40,8 @@ static const wchar_t *s_sidebar_labels[PANEL_COUNT] = {
     L"Hex View",
     L"Disasm",
     L"Debugger",
+    L"Pointers",
+    L"Structure",
     L"Scripts",
     L"Profiles",
 };
@@ -128,6 +130,8 @@ void tui_run(void)
 {
     while (tui_state.running) {
         tui_poll_scan();
+        tui_pointer_poll();
+        tui_injection_poll();
         tui_tick_debugger();
         tick_address_table();
         tick_hexview();
@@ -144,6 +148,7 @@ void tui_run(void)
 void tui_shutdown(void)
 {
     if (!tui_detach_target()) return;
+    tui_pointer_reset();
     CONSOLE_CURSOR_INFO ci = {0};
     GetConsoleCursorInfo(tui_state.hOut, &ci);
     ci.bVisible = TRUE;
@@ -228,10 +233,10 @@ static void draw_header(Screen *screen)
 static void draw_sidebar(Screen *screen)
 {
     int sb_end = 1 + SIDEBAR_WIDTH;
-
-    for (int i = 0; i < PANEL_COUNT; i++) {
-        int row = CONTENT_START + i;
-        if (row >= tui_state.height - 2) break;
+    int visible = tui_state.height - 4 - CONTENT_START + 1;
+    int first = tui_state.sidebar_idx >= visible ? tui_state.sidebar_idx - visible + 1 : 0;
+    for (int i = first; i < PANEL_COUNT && i < first + visible; i++) {
+        int row = CONTENT_START + i - first;
 
         WORD attr;
         if (i == tui_state.sidebar_idx && tui_state.focus == FOCUS_SIDEBAR) {
@@ -314,6 +319,10 @@ static void draw_main_panel(Screen *screen)
         draw_disasm_panel(screen);
     } else if (tui_state.panel == PANEL_DEBUGGER) {
         tui_draw_debugger(screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
+    } else if (tui_state.panel == PANEL_POINTERS) {
+        tui_pointer_draw(screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
+    } else if (tui_state.panel == PANEL_STRUCTURE) {
+        tui_structure_draw(screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
     } else {
         screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", s_attr_normal);
     }
@@ -427,7 +436,7 @@ static void draw_scanner_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > row) {
         screen_text(screen, main_x, help_row,
-                    L"k watch  a addentry  Up/Dn select  ? help",
+                    L"k watch  p pointers  i inspect  a save  ? help",
                     s_attr_border);
     }
 }
@@ -508,7 +517,7 @@ static void draw_address_table_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > CONTENT_START) {
         screen_text(screen, main_x, help_row,
-                    L"k watch  d del  l lock  u unlock  e label  v hex  ? help",
+                    L"k watch  p pointers  i inspect  v hex  ? help",
                     s_attr_border);
     }
 }
@@ -959,10 +968,12 @@ static void handle_key(WORD vk, WCHAR ch)
             }
         }
         if (tui_state.panel == PANEL_SCANNER) {
-            if (ch == L'k' && !tui_scan_is_running() && tui_state.scanner.has_results &&
+            if ((ch == L'k' || ch == L'p' || ch == L'i') && !tui_scan_is_running() && tui_state.scanner.has_results &&
                 (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
-                tui_watch_value(tui_state.scanner.results.addresses[tui_state.scanner_selected_index],
-                                tui_state.scanner.results_type);
+                unsigned long long address = tui_state.scanner.results.addresses[tui_state.scanner_selected_index];
+                if (ch == L'k') tui_watch_value(address, tui_state.scanner.results_type);
+                else if (ch == L'p') tui_pointer_start(address, 2, 1024);
+                else tui_structure_open(address, 256);
             } else if (ch == L'?') {
                 tui_open_help();
             } else if (vk == VK_UP && tui_state.scanner_selected_index > 0) {
@@ -992,9 +1003,11 @@ static void handle_key(WORD vk, WCHAR ch)
         }
         if (tui_state.panel == PANEL_ADDRTABLE) {
             size_t count = tui_state.address_table.count;
-            if (ch == L'k' && count > 0) {
+            if ((ch == L'k' || ch == L'p' || ch == L'i') && count > 0) {
                 const AddrEntry *entry = &tui_state.address_table.entries[tui_state.address_table_selected];
-                tui_watch_value(entry->address, entry->type);
+                if (ch == L'k') tui_watch_value(entry->address, entry->type);
+                else if (ch == L'p') tui_pointer_start(entry->address, 2, 1024);
+                else tui_structure_open(entry->address, 256);
             } else if (vk == VK_UP && tui_state.address_table_selected > 0) {
                 tui_state.address_table_selected--;
                 if (tui_state.address_table_selected < tui_state.address_table_scroll)
@@ -1157,6 +1170,8 @@ static void handle_key(WORD vk, WCHAR ch)
             }
         }
         if (tui_state.panel == PANEL_DEBUGGER) tui_debugger_key(vk, ch);
+        if (tui_state.panel == PANEL_POINTERS) tui_pointer_key(vk, ch);
+        if (tui_state.panel == PANEL_STRUCTURE) tui_structure_key(vk, ch);
         if (vk == VK_ESCAPE) {
             tui_state.focus = FOCUS_SIDEBAR;
         }
@@ -1214,7 +1229,7 @@ static void stop_after_console_failure(void)
         return;
     }
     if (!reported) {
-        fwprintf(stderr, L"Console failed; debugger cleanup failed: %s. Retaining session and retrying.\n",
+        fwprintf(stderr, L"Console failed; target cleanup pending: %s. Retaining session and retrying.\n",
                  tui_state.status_msg);
         reported = 1;
     }

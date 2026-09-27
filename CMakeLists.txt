@@ -13,10 +13,15 @@ add_library(memforge_core STATIC
     core/debugger/debugger.c
     core/debugger/events.c
     core/debugger/watch.c
+    core/injector/injector.c
+    core/pointer_scan/pointer_scan.c
+    core/pointer_scan/index.c
+    core/structure/structure.c
     core/scanner/scanner.c
     core/address_table/address_table.c
     platform/platform.c
     platform/debugger.c
+    platform/injector.c
 )
 
 add_library(memforge_zydis STATIC
@@ -34,6 +39,9 @@ add_executable(memforge
     tui/tui.c
     tui/commands.c
     tui/debugger.c
+    tui/injection.c
+    tui/pointers.c
+    tui/structure.c
     tui/helpers.c
     tui/scan_job.c
     tui/render.c
@@ -45,6 +53,7 @@ add_executable(memforge
     tui/help_books/hexview.c
     tui/help_books/disasm.c
     tui/help_books/debugger.c
+    tui/help_books/tools.c
 )
 target_link_libraries(memforge PRIVATE memforge_core)
 
@@ -57,6 +66,16 @@ add_executable(debugger_tests test/debugger_tests.c)
 target_link_libraries(debugger_tests PRIVATE memforge_core)
 add_dependencies(debugger_tests debugger_target)
 
+add_library(injector_fixture SHARED test/injector_fixture.c)
+add_executable(injector_tests test/injector_tests.c)
+target_link_libraries(injector_tests PRIVATE memforge_core)
+add_dependencies(injector_tests injector_fixture)
+add_executable(pointer_target test/pointer_target.c)
+add_executable(pointer_tests test/pointer_tests.c)
+target_link_libraries(pointer_tests PRIVATE memforge_core)
+add_dependencies(pointer_tests pointer_target)
+add_executable(structure_tests test/structure_tests.c)
+target_link_libraries(structure_tests PRIVATE memforge_core)
 add_executable(core_tests
     test/core_tests.c
 )
@@ -86,6 +105,9 @@ add_executable(tui_command_tests
     test/tui_command_tests.c
     tui/commands.c
     tui/debugger.c
+    tui/injection.c
+    tui/pointers.c
+    tui/structure.c
     tui/render.c
     tui/helpers.c
     tui/scan_job.c
@@ -97,6 +119,7 @@ add_executable(tui_command_tests
     tui/help_books/hexview.c
     tui/help_books/disasm.c
     tui/help_books/debugger.c
+    tui/help_books/tools.c
 )
 target_link_libraries(tui_command_tests PRIVATE memforge_core)
 
@@ -104,6 +127,9 @@ add_executable(tui_runtime_tests
     test/tui_runtime_tests.c
     tui/commands.c
     tui/debugger.c
+    tui/injection.c
+    tui/pointers.c
+    tui/structure.c
     tui/helpers.c
     tui/scan_job.c
     tui/render.c
@@ -115,15 +141,16 @@ add_executable(tui_runtime_tests
     tui/help_books/hexview.c
     tui/help_books/disasm.c
     tui/help_books/debugger.c
+    tui/help_books/tools.c
 )
 target_link_libraries(tui_runtime_tests PRIVATE memforge_core)
 
 add_executable(tui_console_tests test/tui_console_tests.c)
-add_dependencies(tui_console_tests memforge debugger_target)
+add_dependencies(tui_console_tests memforge debugger_target injector_fixture)
 
 foreach(target memforge_zydis memforge_core memforge core_tests hexview_tests disasm_tests
                scanner_tests address_table_tests tui_command_tests tui_runtime_tests tui_console_tests
-               debugger_target debugger_tests)
+               debugger_target debugger_tests injector_fixture injector_tests pointer_target pointer_tests structure_tests)
     target_compile_options(${target} PRIVATE /W4 /WX /wd5105)
 endforeach()
 target_compile_options(test_target PRIVATE /W4 /WX)
@@ -150,3 +177,8 @@ add_test(NAME tui_command_tests COMMAND tui_command_tests
 add_test(NAME tui_runtime_tests COMMAND tui_runtime_tests)
 add_test(NAME tui_console_tests COMMAND tui_console_tests $<TARGET_FILE:memforge>)
 set_tests_properties(tui_console_tests PROPERTIES TIMEOUT 40)
+
+add_test(NAME injector_tests COMMAND injector_tests WORKING_DIRECTORY $<TARGET_FILE_DIR:injector_tests>)
+add_test(NAME pointer_tests COMMAND pointer_tests WORKING_DIRECTORY $<TARGET_FILE_DIR:pointer_tests>)
+add_test(NAME structure_tests COMMAND structure_tests)
+set_tests_properties(injector_tests pointer_tests PROPERTIES TIMEOUT 30)

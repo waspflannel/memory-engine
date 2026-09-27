@@ -96,11 +96,14 @@ DWORD tui_next_wait_timeout(ULONGLONG now)
 
 int tui_detach_target(void)
 {
+    if (!tui_injection_release()) return 0;
     if (tui_state.debugger &&
         !tui_debugger_result(debugger_detach(&tui_state.debugger), L"Debugger detached")) return 0;
     tui_state.debugger_state = (DebuggerState){0};
     tui_state.debugger_scroll = 0;
     tui_cancel_scan();
+    tui_pointer_cancel();
+    tui_structure_reset();
     if (tui_state.scanner_inited) {
         scanner_session_destroy(&tui_state.scanner);
         tui_state.scanner_inited = FALSE;
@@ -219,6 +222,25 @@ const wchar_t *tui_scan_type_name(ScanType type)
     size_t converted = 0;
     if (!canonical || mbstowcs_s(&converted, name, _countof(name), canonical, _TRUNCATE) != 0) return L"?";
     return name;
+}
+
+void tui_format_numeric_value(wchar_t *output, size_t capacity, ScanType type, const unsigned char *bytes)
+{
+#define VALUE(kind, format) { kind value; memcpy(&value, bytes, sizeof(value)); swprintf_s(output, capacity, format, value); break; }
+    switch (type) {
+    case SCAN_TYPE_I8: VALUE(int8_t, L"%d")
+    case SCAN_TYPE_I16: VALUE(int16_t, L"%d")
+    case SCAN_TYPE_I32: VALUE(int32_t, L"%d")
+    case SCAN_TYPE_I64: VALUE(int64_t, L"%lld")
+    case SCAN_TYPE_U8: VALUE(uint8_t, L"%u")
+    case SCAN_TYPE_U16: VALUE(uint16_t, L"%u")
+    case SCAN_TYPE_U32: VALUE(uint32_t, L"%u")
+    case SCAN_TYPE_U64: VALUE(uint64_t, L"%llu")
+    case SCAN_TYPE_F32: VALUE(float, L"%.9g")
+    case SCAN_TYPE_F64: VALUE(double, L"%.17g")
+    default: wcscpy_s(output, capacity, L"?"); break;
+    }
+#undef VALUE
 }
 
 int tui_parse_scan_value(const wchar_t *args, ScanValue *out)

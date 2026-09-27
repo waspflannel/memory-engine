@@ -9,6 +9,7 @@
 
 #include "tui_internal.h"
 #include "core/memory/memory.h"
+#include "core/structure/structure.h"
 
 /* Forward declarations — definitions at bottom of file. */
 typedef void (*CommandHandler)(const wchar_t *args);
@@ -38,6 +39,11 @@ static void cmd_disasm(const wchar_t *args);
 static void cmd_watch(const wchar_t *args);
 static void cmd_continue(const wchar_t *args);
 static void cmd_unwatch(const wchar_t *args);
+static void cmd_inject(const wchar_t *args);
+static void cmd_pointers(const wchar_t *args);
+static void cmd_pointerfilter(const wchar_t *args);
+static void cmd_structure(const wchar_t *args);
+static void cmd_field(const wchar_t *args);
 static const wchar_t *skip_spaces(const wchar_t *text);
 static int parse_unsigned(const wchar_t *text, int base, unsigned long long maximum,
                           unsigned long long *value, const wchar_t **tail);
@@ -66,6 +72,11 @@ static const Command commands[] = {
     { L"watch ", cmd_watch },
     { L"continue", cmd_continue },
     { L"unwatch", cmd_unwatch },
+    { L"inject ", cmd_inject },
+    { L"pointers ", cmd_pointers },
+    { L"pointerfilter ", cmd_pointerfilter },
+    { L"structure ", cmd_structure },
+    { L"field ", cmd_field },
 };
 
 /* ---- Public API (order matches tui_internal.h) ---- */
@@ -569,6 +580,78 @@ static void cmd_unwatch(const wchar_t *args)
 {
     if (!tail_is_empty(args)) tui_set_status(L"usage: unwatch", TRUE);
     else tui_stop_watch();
+}
+
+static void cmd_inject(const wchar_t *args)
+{
+    wchar_t path[CMD_BUF_MAX];
+    args = skip_spaces(args);
+    size_t length = wcslen(args);
+    while (length && (args[length - 1] == L' ' || args[length - 1] == L'\t')) length--;
+    if (length >= 2 && args[0] == L'"' && args[length - 1] == L'"') { args++; length -= 2; }
+    if (!length || length >= _countof(path)) {
+        tui_set_status(L"usage: inject <DLL path>", TRUE);
+        return;
+    }
+    wmemcpy(path, args, length);
+    path[length] = 0;
+    tui_injection_start(path);
+}
+
+static void cmd_pointers(const wchar_t *args)
+{
+    unsigned long long address, depth = 2, offset = 1024;
+    const wchar_t *tail;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || !address ||
+        (!tail_is_empty(tail) && !parse_unsigned(tail, 10, 3, &depth, &tail)) || !depth ||
+        (!tail_is_empty(tail) && !parse_unsigned(tail, 10, 4096, &offset, &tail)) || !tail_is_empty(tail)) {
+        tui_set_status(L"usage: pointers <hex_address> [depth 1-3] [max_offset 0-4096 decimal]", TRUE);
+        return;
+    }
+    tui_pointer_start(address, (unsigned int)depth, (unsigned int)offset);
+}
+
+static void cmd_pointerfilter(const wchar_t *args)
+{
+    unsigned long long address;
+    const wchar_t *tail;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || !address || !tail_is_empty(tail))
+        tui_set_status(L"usage: pointerfilter <new_hex_address>", TRUE);
+    else tui_pointer_filter(address);
+}
+
+static void cmd_structure(const wchar_t *args)
+{
+    unsigned long long address, size = STRUCTURE_MAX_BYTES;
+    const wchar_t *tail;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || !address ||
+        (!tail_is_empty(tail) && !parse_unsigned(tail, 10, STRUCTURE_MAX_BYTES, &size, &tail)) || !size || !tail_is_empty(tail)) {
+        tui_set_status(L"usage: structure <hex_address> [size 1-256 decimal]", TRUE);
+        return;
+    }
+    tui_structure_open(address, (size_t)size);
+}
+
+static void cmd_field(const wchar_t *args)
+{
+    unsigned long long offset;
+    const wchar_t *tail;
+    char name[16];
+    wchar_t token[16];
+    ScanType type;
+    if (!parse_unsigned(args, 16, STRUCTURE_MAX_BYTES - 1, &offset, &tail)) goto invalid;
+    tail = skip_spaces(tail);
+    size_t length = wcscspn(tail, L" \t");
+    if (!length || length >= _countof(token)) goto invalid;
+    wmemcpy(token, tail, length);
+    token[length] = 0;
+    tail = skip_spaces(tail + length);
+    if (!*tail || !narrow_ascii(token, name, sizeof(name)) ||
+        scanner_type_from_name(name, &type) != PLATFORM_OK || !scanner_type_width(type)) goto invalid;
+    tui_structure_field((size_t)offset, type, tail);
+    return;
+invalid:
+    tui_set_status(L"usage: field <hex_offset> <numeric_type> <label>", TRUE);
 }
 
 static const wchar_t *skip_spaces(const wchar_t *text)
