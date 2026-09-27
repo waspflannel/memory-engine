@@ -108,11 +108,13 @@ static void test_debugger_panel(void)
 {
     /* Rendering borrows a snapshot, not the debugger object. */
     tui_state.debugger = (Debugger *)(UINT_PTR)1;
-    tui_state.debugger_state = (DebuggerState){.attached = 1, .paused = 1, .registers_valid = 1,
-                                               .thread_id = 123, .registers.rip = 0x12345678};
-    tui_state.debugger_state.breakpoints[31] = (DebuggerBreakpoint){
-        .active = 1, .kind = DEBUGGER_HARDWARE, .address = 0x12345678, .thread_id = 123, .slot = 3
-    };
+    tui_state.debugger_state = (DebuggerState){.attached = 1, .watching = 1, .paused = 1,
+        .registers_valid = 1, .value_valid = 1, .address = 0x12340000, .size = 4,
+        .thread_id = 123, .before = {10}, .after = {9}, .registers.rip = 0x12345678};
+    tui_state.debugger_type = SCAN_TYPE_I32;
+    tui_state.debugger_disasm.count = 1;
+    tui_state.debugger_disasm.instructions[0].address = 0x12345678;
+    strcpy_s(tui_state.debugger_disasm.instructions[0].text, DISASM_TEXT_MAX, "ret");
     tui_state.panel = PANEL_DEBUGGER;
     tui_state.focus = FOCUS_MAIN;
     const int sizes[][2] = {{80, 25}, {40, 10}};
@@ -125,37 +127,38 @@ static void test_debugger_panel(void)
             check(0, "allocate debugger render fixture");
             break;
         }
-        screen_clear(&screen, s_attr_normal);
-        draw_debugger_panel(&screen);
-        check(screen_contains(&screen, L"Paused  thread 123"), "debugger displays pause and event thread");
-        const wchar_t *required[] = { L"RAX", L"RBX", L"RCX", L"RDX", L"RSI", L"RDI", L"RBP", L"RSP",
-                                      L"R8", L"R9", L"R10", L"R11", L"R12", L"R13", L"R14", L"R15",
-                                      L"RIP 0000000012345678", L"EFLAGS", L"31 HW", L"tid 123 slot 3" };
+        const wchar_t *required[] = { L"Value changed", L"12340000", L"Type: i32", L"Before: 10", L"After: 9",
+            L"Stopped thread: 123", L"RAX", L"RBX", L"RCX", L"RDX", L"RSI", L"RDI", L"RBP", L"RSP",
+            L"R8", L"R9", L"R10", L"R11", L"R12", L"R13", L"R14", L"R15", L"RIP 0000000012345678", L"EFLAGS", L"ret" };
         int found[_countof(required)] = {0};
-        for (int scroll = 0; scroll < 40; scroll++) {
+        for (int scroll = 0; scroll < 60; scroll++) {
             screen_clear(&screen, s_attr_normal);
-            draw_debugger_panel(&screen);
+            tui_draw_debugger(&screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
+            check(screen_contains(&screen, L"[C] Continue") && screen_contains(&screen, L"[S] Stop watching") &&
+                  screen_contains(&screen, L"[D] Detach"), "all three watch actions remain visible while scrolling");
             for (size_t j = 0; j < _countof(required); j++)
                 if (screen_contains(&screen, required[j])) found[j] = 1;
             handle_key(VK_DOWN, 0);
         }
         for (size_t j = 0; j < _countof(required); j++)
-            check(found[j], "debugger registers and breakpoint metadata remain reachable at both console sizes");
+            check(found[j], "watch values, disassembly and all registers reachable at both console sizes");
         tui_state.debugger_scroll = 0;
         tui_state.debugger_state.registers_valid = 0;
-        screen_clear(&screen, s_attr_normal);
-        draw_debugger_panel(&screen);
-        check(screen_contains(&screen, L"Registers unavailable") && !screen_contains(&screen, L"RAX"),
-              "failed context reads do not display stale register values");
+        int unavailable = 0, stale = 0;
+        for (int scroll = 0; scroll < 15; scroll++) {
+            screen_clear(&screen, s_attr_normal);
+            tui_draw_debugger(&screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
+            unavailable |= screen_contains(&screen, L"Registers unavailable");
+            stale |= screen_contains(&screen, L"RAX");
+            handle_key(VK_DOWN, 0);
+        }
+        check(unavailable && !stale, "invalid register snapshot never displays stale registers");
         tui_state.debugger_state.registers_valid = 1;
         screen_free(&screen);
     }
     tui_state.address_table_last_refresh = 1000;
     tui_state.address_table_last_lock = 1000;
-    check(tui_next_wait_timeout(1000) == 20, "debugger limits input wait to twenty milliseconds");
-    handle_key(0, L'd');
-    check(tui_state.panel == PANEL_DISASM && tui_state.disasm_address == 0x12345678,
-          "debugger shortcut opens disassembly at valid paused RIP");
+    check(tui_next_wait_timeout(1000) == 20, "watch limits input wait to twenty milliseconds");
     tui_state.debugger = NULL;
     tui_state.debugger_state = (DebuggerState){0};
     tui_state.panel = PANEL_PROCESSES;

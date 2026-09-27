@@ -23,7 +23,7 @@ static int wait_for_text(const wchar_t *text);
 static int read_screen(void);
 static void print_screen(void);
 static int start_debug_target(const wchar_t *application_path, DWORD *pid, unsigned int *thread_id,
-                              unsigned long long *code_address);
+                              unsigned long long *code_address, unsigned long long *value_address);
 
 /* Isolate console attachment in a helper process: the caller's console and
    redirected standard handles remain untouched. The job owns both children. */
@@ -149,47 +149,62 @@ static int run_driver(const wchar_t *executable)
     if (!wait_for_text(L" > ") || wcsstr(snapshot, L"invalid_fixture_command")) goto cleanup;
     DWORD target_pid;
     unsigned int thread_id;
-    unsigned long long code_address;
+    unsigned long long code_address, value_address;
     step = "start independent debugger fixture";
-    if (!start_debug_target(executable, &target_pid, &thread_id, &code_address)) goto cleanup;
+    if (!start_debug_target(executable, &target_pid, &thread_id, &code_address, &value_address)) goto cleanup;
     swprintf_s(command, _countof(command), L"attach %lu", target_pid);
     step = "attach debugger fixture";
     if (!send_command(command) || !wait_for_text(L"Attached to")) goto cleanup;
-    step = "debug command and initial register display";
-    if (!send_command(L"debug") || !wait_for_text(L"Paused  thread") ||
-        !wcsstr(snapshot, L"RAX") || !wcsstr(snapshot, L"RIP")) goto cleanup;
-    swprintf_s(command, _countof(command), L"swbreak %llX", code_address);
-    step = "set software breakpoint";
-    if (!send_command(command) || !wait_for_text(L"Software breakpoint 0")) goto cleanup;
-    step = "continue to software breakpoint";
-    if (!send_command(L"continue")) goto cleanup;
-    wchar_t expected_rip[40];
-    swprintf_s(expected_rip, _countof(expected_rip), L"RIP %016llX", code_address);
-    if (!wait_for_text(expected_rip)) goto cleanup;
-    step = "remove software breakpoint";
-    if (!send_command(L"delbreak 0") || !wait_for_text(L"Breakpoint removed")) goto cleanup;
-    swprintf_s(command, _countof(command), L"hwbreak %u %llX", thread_id, code_address);
-    step = "set hardware breakpoint";
-    if (!send_command(command) || !wait_for_text(L"Hardware breakpoint 0")) goto cleanup;
-    step = "continue to hardware breakpoint";
-    if (!send_command(L"continue") || !wait_for_text(L"Exception: 80000004") ||
-        !wcsstr(snapshot, expected_rip)) goto cleanup;
-    printf("Rendered 80x25 debugger screen after software and hardware hits:\n");
+    LONG initial_value = 19088743;
+    SIZE_T transferred;
+    DWORD written;
+    if (!WriteProcessMemory(debug_target, (LPVOID)(uintptr_t)value_address, &initial_value,
+                            sizeof(initial_value), &transferred) || transferred != sizeof(initial_value)) goto cleanup;
+    step = "scan selected watched value";
+    if (!send_command(L"scan 19088743") || !wait_for_text(L"First scan:")) goto cleanup;
+    /* Select Scanner from the sidebar, then k watches its selected result. */
+    if (!send_key(VK_ESCAPE, 0)) goto cleanup;
+    for (int i = 0; i < 8; i++) if (!send_key(VK_UP, 0)) goto cleanup;
+    if (!send_key(VK_DOWN, 0) || !send_key(VK_RETURN, 0) || !send_key(0, L'k') ||
+        !wait_for_text(L"Watching for changes")) goto cleanup;
+    step = "CPU write pauses with old/new values and next instruction";
+    if (!WriteFile(debug_input, "i", 1, &written, NULL) || written != 1 ||
+        !wait_for_text(L"After: 19088744") || !wcsstr(snapshot, L"Before: 19088743") ||
+        !wcsstr(snapshot, L"Next instructions (after write)") ||
+        !wcsstr(snapshot, L"[C] Continue") || !wcsstr(snapshot, L"[S] Stop watching") ||
+        !wcsstr(snapshot, L"[D] Detach")) goto cleanup;
+    wchar_t next_instruction[32];
+    swprintf_s(next_instruction, _countof(next_instruction), L"%016llX", code_address + 2);
+    if (!wcsstr(snapshot, next_instruction)) goto cleanup;
+    printf("Rendered watched-value change screen:\n");
     print_screen();
-    step = "remove hardware breakpoint and resume";
-    if (!send_command(L"delbreak 0") || !wait_for_text(L"Breakpoint removed") ||
-        !send_command(L"continue") || !wait_for_text(L"Running  thread")) goto cleanup;
-    step = "pause running target";
-    if (!send_command(L"break") || !wait_for_text(L"Paused  thread")) goto cleanup;
-    step = "detach debugger without closing target";
-    if (!send_command(L"undebug") || !wait_for_text(L"Debugger detached; target remains attached") ||
+    step = "continue action watches next change";
+    if (!send_key(0, L'c') || !wait_for_text(L"Watching for changes") ||
+        !WriteFile(debug_input, "i", 1, &written, NULL) || written != 1 ||
+        !wait_for_text(L"After: 19088745") || !wcsstr(snapshot, L"Before: 19088744")) goto cleanup;
+    step = "stop watching keeps memory target attached";
+    if (!send_key(0, L's') || !wait_for_text(L"Stopped watching; target remains attached") ||
         WaitForSingleObject(debug_target, 0) != WAIT_TIMEOUT) goto cleanup;
-    unsigned char restored_byte;
-    SIZE_T bytes_read;
-    if (!ReadProcessMemory(debug_target, (LPCVOID)(uintptr_t)code_address, &restored_byte, 1, &bytes_read) ||
-        bytes_read != 1 || restored_byte != 0xFF) goto cleanup;
-    step = "normal quit while debugger attached";
-    if (!send_command(L"debug") || !wait_for_text(L"Paused  thread")) goto cleanup;
+    swprintf_s(command, _countof(command), L"read %llX 4", value_address);
+    if (!send_command(command) || !wait_for_text(L"69 45 23 01")) goto cleanup;
+    swprintf_s(command, _countof(command), L"addentry %llX i32 watch_fixture", value_address);
+    step = "address-table selected watch shortcut";
+    if (!send_command(command) || !wait_for_text(L"Added entry 1:")) goto cleanup;
+    /* addentry selects the new row; open AddrTable from the sidebar. */
+    if (!send_key(VK_ESCAPE, 0)) goto cleanup;
+    for (int i = 0; i < 8; i++) if (!send_key(VK_UP, 0)) goto cleanup;
+    if (!send_key(VK_DOWN, 0) || !send_key(VK_DOWN, 0) || !send_key(VK_RETURN, 0) || !send_key(0, L'k') ||
+        !wait_for_text(L"Watching for changes")) goto cleanup;
+    if (!WriteFile(debug_input, "i", 1, &written, NULL) || written != 1 ||
+        !wait_for_text(L"After: 19088746")) goto cleanup;
+    step = "detach action releases debugger and memory target";
+    if (!send_key(0, L'd') || !wait_for_text(L"[No process attached]") ||
+        WaitForSingleObject(debug_target, 0) != WAIT_TIMEOUT) goto cleanup;
+    step = "watch command and quit while active";
+    swprintf_s(command, _countof(command), L"attach %lu", target_pid);
+    if (!send_command(command) || !wait_for_text(L"Attached to")) goto cleanup;
+    swprintf_s(command, _countof(command), L"watch %llX i32", value_address);
+    if (!send_command(command) || !wait_for_text(L"Watching for changes")) goto cleanup;
     step = "quit through keyboard";
     if (!send_command(L"quit") || WaitForSingleObject(application, 5000) != WAIT_OBJECT_0) goto cleanup;
     DWORD exit_code;
@@ -220,7 +235,7 @@ cleanup:
 }
 
 static int start_debug_target(const wchar_t *application_path, DWORD *pid, unsigned int *thread_id,
-                              unsigned long long *code_address)
+                              unsigned long long *code_address, unsigned long long *value_address)
 {
     wchar_t path[MAX_PATH];
     if (wcsncpy_s(path, _countof(path), application_path, _TRUNCATE) != 0) return 0;
@@ -258,7 +273,7 @@ static int start_debug_target(const wchar_t *application_path, DWORD *pid, unsig
         if (info[length++] == '\n') break;
     }
     info[length] = '\0';
-    started = sscanf_s(info, "%u %llx", thread_id, code_address) == 2;
+    started = sscanf_s(info, "%u %llx %llx", thread_id, code_address, value_address) == 3;
 done:
     if (input_read) CloseHandle(input_read);
     if (output_read) CloseHandle(output_read);

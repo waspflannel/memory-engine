@@ -12,7 +12,7 @@ add_library(memforge_core STATIC
     core/disasm/disasm.c
     core/debugger/debugger.c
     core/debugger/events.c
-    core/debugger/breakpoints.c
+    core/debugger/watch.c
     core/scanner/scanner.c
     core/address_table/address_table.c
     platform/platform.c
@@ -33,6 +33,7 @@ add_executable(memforge
     tui/main.c
     tui/tui.c
     tui/commands.c
+    tui/debugger.c
     tui/helpers.c
     tui/scan_job.c
     tui/render.c
@@ -84,6 +85,8 @@ target_link_libraries(address_table_tests PRIVATE memforge_core)
 add_executable(tui_command_tests
     test/tui_command_tests.c
     tui/commands.c
+    tui/debugger.c
+    tui/render.c
     tui/helpers.c
     tui/scan_job.c
     tui/help.c
@@ -100,6 +103,7 @@ target_link_libraries(tui_command_tests PRIVATE memforge_core)
 add_executable(tui_runtime_tests
     test/tui_runtime_tests.c
     tui/commands.c
+    tui/debugger.c
     tui/helpers.c
     tui/scan_job.c
     tui/render.c

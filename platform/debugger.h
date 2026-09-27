@@ -30,8 +30,6 @@ typedef struct {
     void *thread_handle, *process_handle;
     unsigned long long thread_start;
     unsigned int exception_code;
-    unsigned long long exception_address;
-    int first_chance;
 } PlatformDebugEvent;
 
 PlatformError platform_debug_supported(void *process, unsigned int pid, int *supported);
@@ -43,13 +41,7 @@ PlatformError platform_debug_break(void *process);
 PlatformError platform_debug_wait(unsigned int timeout_ms, PlatformDebugEvent *event, int *available);
 PlatformError platform_debug_continue(const PlatformDebugEvent *event, int handled);
 PlatformError platform_debug_get_context(void *thread, PlatformDebugContext *context);
-/* Changes only RIP/EFLAGS and debug registers; all other context stays intact. */
+/* Changes only debug registers; execution context stays intact. */
 PlatformError platform_debug_set_context(void *thread, const PlatformDebugContext *context);
-PlatformError platform_debug_suspend(void *thread);
-PlatformError platform_debug_resume(void *thread);
-/* protection starts at zero and retains the original protection across retries.
-   Failure can follow a successful write: callers must retain restoration state. */
-PlatformError platform_debug_patch(void *process, unsigned long long address,
-                                  unsigned char byte, unsigned int *protection);
 
 #endif

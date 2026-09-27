@@ -35,14 +35,9 @@ static void cmd_saveentry(const wchar_t *args);
 static void cmd_loadentry(const wchar_t *args);
 static void cmd_hex(const wchar_t *args);
 static void cmd_disasm(const wchar_t *args);
-static void cmd_debug(const wchar_t *args);
-static void cmd_break(const wchar_t *args);
+static void cmd_watch(const wchar_t *args);
 static void cmd_continue(const wchar_t *args);
-static void cmd_undebug(const wchar_t *args);
-static void cmd_swbreak(const wchar_t *args);
-static void cmd_hwbreak(const wchar_t *args);
-static void cmd_delbreak(const wchar_t *args);
-static int require_debugger(void);
+static void cmd_unwatch(const wchar_t *args);
 static const wchar_t *skip_spaces(const wchar_t *text);
 static int parse_unsigned(const wchar_t *text, int base, unsigned long long maximum,
                           unsigned long long *value, const wchar_t **tail);
@@ -68,13 +63,9 @@ static const Command commands[] = {
     { L"loadentry ", cmd_loadentry },
     { L"hex ", cmd_hex },
     { L"disasm ", cmd_disasm },
-    { L"debug", cmd_debug },
-    { L"break", cmd_break },
+    { L"watch ", cmd_watch },
     { L"continue", cmd_continue },
-    { L"undebug", cmd_undebug },
-    { L"swbreak ", cmd_swbreak },
-    { L"hwbreak ", cmd_hwbreak },
-    { L"delbreak ", cmd_delbreak },
+    { L"unwatch", cmd_unwatch },
 };
 
 /* ---- Public API (order matches tui_internal.h) ---- */
@@ -553,108 +544,31 @@ static void cmd_disasm(const wchar_t *args)
     tui_disasm_jump(address);
 }
 
-static void cmd_debug(const wchar_t *args)
+static void cmd_watch(const wchar_t *args)
 {
-    if (!tail_is_empty(args)) {
-        tui_set_status(L"usage: debug", TRUE);
+    unsigned long long address;
+    const wchar_t *tail;
+    char name[16];
+    ScanType type;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) ||
+        !narrow_ascii(skip_spaces(tail), name, sizeof(name)) ||
+        scanner_type_from_name(name, &type) != PLATFORM_OK) {
+        tui_set_status(L"usage: watch <hex_address> <numeric_type>", TRUE);
         return;
     }
-    if (!tui_state.attached) {
-        tui_set_status(L"No process attached", TRUE);
-        return;
-    }
-    if (tui_state.debugger) {
-        tui_set_status(L"Debugger already attached; use undebug first", TRUE);
-        return;
-    }
-    if (tui_debugger_result(debugger_attach(&tui_state.target, &tui_state.debugger),
-                            L"Debugger attached; waiting for initial break")) {
-        tui_state.debugger_scroll = 0;
-        tui_state.panel = PANEL_DEBUGGER;
-        tui_state.sidebar_idx = PANEL_DEBUGGER;
-    }
-}
-
-static int require_debugger(void)
-{
-    if (tui_state.debugger) return 1;
-    tui_set_status(L"No debugger attached; use debug", TRUE);
-    return 0;
-}
-
-static void cmd_break(const wchar_t *args)
-{
-    if (!tail_is_empty(args)) tui_set_status(L"usage: break", TRUE);
-    else if (require_debugger())
-        tui_debugger_result(debugger_pause(tui_state.debugger), L"Break requested");
+    tui_watch_value(address, type);
 }
 
 static void cmd_continue(const wchar_t *args)
 {
     if (!tail_is_empty(args)) tui_set_status(L"usage: continue", TRUE);
-    else if (require_debugger())
-        tui_debugger_result(debugger_continue(tui_state.debugger), L"Target resumed");
+    else tui_continue_watch();
 }
 
-static void cmd_undebug(const wchar_t *args)
+static void cmd_unwatch(const wchar_t *args)
 {
-    if (!tail_is_empty(args)) {
-        tui_set_status(L"usage: undebug", TRUE);
-        return;
-    }
-    if (require_debugger() &&
-        tui_debugger_result(debugger_detach(&tui_state.debugger), L"Debugger detached; target remains attached")) {
-        tui_state.debugger_state = (DebuggerState){0};
-        tui_state.debugger_scroll = 0;
-    }
-}
-
-static void cmd_swbreak(const wchar_t *args)
-{
-    unsigned long long address;
-    const wchar_t *tail;
-    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) || !tail_is_empty(tail)) {
-        tui_set_status(L"usage: swbreak <hex_address>", TRUE);
-        return;
-    }
-    if (!require_debugger()) return;
-    unsigned int index;
-    if (tui_debugger_result(debugger_add_software(tui_state.debugger, address, &index), NULL)) {
-        wchar_t message[80];
-        swprintf_s(message, _countof(message), L"Software breakpoint %u at %016llX", index, address);
-        tui_set_status(message, FALSE);
-    }
-}
-
-static void cmd_hwbreak(const wchar_t *args)
-{
-    unsigned long long thread_id, address;
-    const wchar_t *tail;
-    if (!parse_unsigned(args, 10, UINT32_MAX, &thread_id, &tail) || thread_id == 0 ||
-        !parse_unsigned(tail, 16, UINTPTR_MAX, &address, &tail) || !tail_is_empty(tail)) {
-        tui_set_status(L"usage: hwbreak <decimal_tid> <hex_address>", TRUE);
-        return;
-    }
-    if (!require_debugger()) return;
-    unsigned int index;
-    if (tui_debugger_result(debugger_add_hardware(tui_state.debugger, (unsigned int)thread_id,
-                                                address, &index), NULL)) {
-        wchar_t message[80];
-        swprintf_s(message, _countof(message), L"Hardware breakpoint %u on thread %u", index, (unsigned int)thread_id);
-        tui_set_status(message, FALSE);
-    }
-}
-
-static void cmd_delbreak(const wchar_t *args)
-{
-    unsigned long long index;
-    const wchar_t *tail;
-    if (!parse_unsigned(args, 10, DEBUGGER_MAX_BREAKPOINTS - 1, &index, &tail) || !tail_is_empty(tail)) {
-        tui_set_status(L"usage: delbreak <index>", TRUE);
-        return;
-    }
-    if (require_debugger())
-        tui_debugger_result(debugger_remove(tui_state.debugger, (unsigned int)index), L"Breakpoint removed");
+    if (!tail_is_empty(args)) tui_set_status(L"usage: unwatch", TRUE);
+    else tui_stop_watch();
 }
 
 static const wchar_t *skip_spaces(const wchar_t *text)

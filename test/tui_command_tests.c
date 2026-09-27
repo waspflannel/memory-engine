@@ -3,6 +3,7 @@
 #define _UNICODE
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include "tui/tui_internal.h"
@@ -100,26 +101,28 @@ int main(void)
     run_command(L"disasm 100junk");
     check(tui_state.status_error, "disasm command rejects a trailing address suffix");
 
-    const wchar_t *invalid_debug_commands[] = {
-        L"swbreak 1234junk", L"swbreak -1", L"hwbreak 0 1234", L"hwbreak 1 1234junk",
-        L"hwbreak 4294967296 1234", L"delbreak 32", L"delbreak garbage",
-        L"debug extra", L"break extra", L"continue extra", L"undebug extra"
+    const wchar_t *invalid_watch_commands[] = {
+        L"watch 1234junk i32", L"watch -1 i32", L"watch 1234", L"watch 1234 i32 extra",
+        L"watch 1234 unknown", L"continue extra", L"unwatch extra"
     };
-    for (size_t i = 0; i < sizeof(invalid_debug_commands) / sizeof(invalid_debug_commands[0]); i++) {
-        run_command(invalid_debug_commands[i]);
+    for (size_t i = 0; i < _countof(invalid_watch_commands); i++) {
+        run_command(invalid_watch_commands[i]);
         check(tui_state.status_error && wcsncmp(tui_state.status_msg, L"usage:", 6) == 0,
-              "debugger command rejects malformed input before core calls");
+              "watch command rejects malformed input before core calls");
     }
+    run_command(L"watch 1234 string");
+    check(tui_state.status_error && !tui_state.debugger, "watch rejects nonnumeric values");
     run_command(L"continue");
-    check(tui_state.status_error && wcsstr(tui_state.status_msg, L"No debugger"),
-          "continue requires a debugger session");
-    run_command(L"debugger");
-    check(tui_state.status_error && wcsstr(tui_state.status_msg, L"Unknown command"),
-          "debug command does not consume a longer word sharing its prefix");
-
+    check(tui_state.status_error && wcsstr(tui_state.status_msg, L"No value watch"),
+          "continue requires a watch");
+    const wchar_t *removed[] = {L"debug", L"break", L"swbreak 1234", L"hwbreak 1 1234", L"delbreak 0", L"undebug"};
+    for (size_t i = 0; i < _countof(removed); i++) {
+        run_command(removed[i]);
+        check(tui_state.status_error && wcsstr(tui_state.status_msg, L"Unknown command"), "execution-breakpoint commands removed");
+    }
     tui_state.attached = FALSE;
-    run_command(L"debug");
-    check(tui_state.status_error && !tui_state.debugger, "debug requires an attached process");
+    run_command(L"watch 1234 i32");
+    check(tui_state.status_error && !tui_state.debugger, "watch requires attached process");
     run_command(L"hex 1234");
     check(tui_state.status_error, "hex command requires an attached process");
     tui_state.attached = TRUE;

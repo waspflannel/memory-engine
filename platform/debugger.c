@@ -103,8 +103,6 @@ PlatformError platform_debug_wait(unsigned int timeout_ms, PlatformDebugEvent *e
     case EXCEPTION_DEBUG_EVENT:
         event->kind = PLATFORM_DEBUG_EXCEPTION;
         event->exception_code = native.u.Exception.ExceptionRecord.ExceptionCode;
-        event->exception_address = (unsigned long long)native.u.Exception.ExceptionRecord.ExceptionAddress;
-        event->first_chance = native.u.Exception.dwFirstChance != 0;
         break;
     default:
         break;
@@ -142,10 +140,7 @@ PlatformError platform_debug_get_context(void *thread, PlatformDebugContext *con
 PlatformError platform_debug_set_context(void *thread, const PlatformDebugContext *context)
 {
     CONTEXT native = {0};
-    native.ContextFlags = CONTEXT_CONTROL | CONTEXT_DEBUG_REGISTERS;
-    if (!GetThreadContext(thread, &native)) return PLATFORM_ERR_QUERY_FAILED;
-    native.Rip = context->registers.rip;
-    native.EFlags = context->registers.eflags;
+    native.ContextFlags = CONTEXT_DEBUG_REGISTERS;
     native.Dr0 = context->dr[0];
     native.Dr1 = context->dr[1];
     native.Dr2 = context->dr[2];
@@ -153,30 +148,4 @@ PlatformError platform_debug_set_context(void *thread, const PlatformDebugContex
     native.Dr6 = context->dr6;
     native.Dr7 = context->dr7;
     return SetThreadContext(thread, &native) ? PLATFORM_OK : PLATFORM_ERR_QUERY_FAILED;
-}
-
-PlatformError platform_debug_suspend(void *thread)
-{
-    return SuspendThread(thread) != (DWORD)-1 ? PLATFORM_OK : PLATFORM_ERR_INTERNAL;
-}
-
-PlatformError platform_debug_resume(void *thread)
-{
-    return ResumeThread(thread) != (DWORD)-1 ? PLATFORM_OK : PLATFORM_ERR_INTERNAL;
-}
-
-PlatformError platform_debug_patch(void *process, unsigned long long address,
-                                  unsigned char byte, unsigned int *protection)
-{
-    DWORD previous;
-    void *location = (void *)address;
-    if (!VirtualProtectEx(process, location, 1, PAGE_EXECUTE_READWRITE, &previous)) {
-        return PLATFORM_ERR_WRITE_FAILED;
-    }
-    if (!*protection) *protection = previous;
-    SIZE_T written = 0;
-    BOOL wrote = WriteProcessMemory(process, location, &byte, 1, &written);
-    BOOL flushed = FlushInstructionCache(process, location, 1);
-    BOOL restored = VirtualProtectEx(process, location, 1, *protection, &previous);
-    return wrote && written == 1 && flushed && restored ? PLATFORM_OK : PLATFORM_ERR_WRITE_FAILED;
 }

@@ -18,6 +18,9 @@
 #include "core/disasm/disasm.h"
 #include "core/debugger/debugger.h"
 #include "tui/help.h"
+#include "tui/render.h"
+
+enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
 
 /* Sizes shared by the tui_state definition (tui.c) and the helpers that touch
    its buffers. Keep these here so the struct field width and the bound checks
@@ -87,6 +90,9 @@ typedef struct {
     Debugger          *debugger;
     DebuggerState      debugger_state;
     int                debugger_scroll;
+    ScanType           debugger_type;
+    DisasmResult       debugger_disasm;
+    PlatformError      debugger_disasm_error;
 
     int             help_open;
     int             help_tab;
@@ -125,6 +131,14 @@ int            tui_open_help(void);
    produces the identity view (every process shown). */
 void           tui_set_process_filter(const wchar_t *needle);
 DWORD          tui_next_wait_timeout(ULONGLONG now);
+
+/* debugger.c -- single-value watch screen and actions. */
+void tui_watch_value(unsigned long long address, ScanType type);
+void tui_continue_watch(void);
+void tui_stop_watch(void);
+void tui_tick_debugger(void);
+void tui_draw_debugger(Screen *screen, int x, int top, int bottom);
+void tui_debugger_key(WORD vk, WCHAR ch);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
 void           tui_exec_command(void);

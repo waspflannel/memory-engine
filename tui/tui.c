@@ -33,8 +33,6 @@
 #define BOX_TRIGHT L'\x2524'
 #define BOX_TTOP   L'\x252C'
 
-enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
-
 static const wchar_t *s_sidebar_labels[PANEL_COUNT] = {
     L"Processes",
     L"Scanner",
@@ -67,7 +65,6 @@ static void draw_scanner_panel(Screen *screen);
 static void draw_address_table_panel(Screen *screen);
 static void draw_hexview_panel(Screen *screen);
 static void draw_disasm_panel(Screen *screen);
-static void draw_debugger_panel(Screen *screen);
 static void draw_main_panel(Screen *screen);
 static void draw_command(Screen *screen);
 static void draw_help(Screen *screen);
@@ -79,7 +76,6 @@ static void read_input(DWORD timeout);
 static void tick_address_table(void);
 static void tick_hexview(void);
 static void tick_disasm(void);
-static void tick_debugger(void);
 static void stop_after_console_failure(void);
 static int  update_console_size(void);
 static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count);
@@ -132,7 +128,7 @@ void tui_run(void)
 {
     while (tui_state.running) {
         tui_poll_scan();
-        tick_debugger();
+        tui_tick_debugger();
         tick_address_table();
         tick_hexview();
         tick_disasm();
@@ -317,70 +313,10 @@ static void draw_main_panel(Screen *screen)
     } else if (tui_state.panel == PANEL_DISASM) {
         draw_disasm_panel(screen);
     } else if (tui_state.panel == PANEL_DEBUGGER) {
-        draw_debugger_panel(screen);
+        tui_draw_debugger(screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
     } else {
         screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", s_attr_normal);
     }
-}
-
-static void draw_debugger_panel(Screen *screen)
-{
-    int main_x = SIDEBAR_WIDTH + 2;
-    int main_w = tui_state.width - main_x - 1;
-    if (!tui_state.debugger) {
-        screen_text(screen, main_x, CONTENT_START, L"Use debug to attach", s_attr_normal);
-        screen_text(screen, main_x, CONTENT_START + 1, L"? for debugger help", s_attr_normal);
-        return;
-    }
-
-    const DebuggerState *state = &tui_state.debugger_state;
-    wchar_t lines[23 + 2 * DEBUGGER_MAX_BREAKPOINTS][80];
-    int count = 0;
-    swprintf_s(lines[count++], _countof(lines[0]), L"%s  thread %u",
-               !state->attached ? L"Exited" : state->paused ? L"Paused" : L"Running", state->thread_id);
-    if (state->paused) {
-        swprintf_s(lines[count++], _countof(lines[0]), L"Exception: %08X", state->exception_code);
-    }
-    if (state->paused && state->registers_valid) {
-        const DebuggerRegisters *registers = &state->registers;
-        const wchar_t *names[] = { L"RAX", L"RBX", L"RCX", L"RDX", L"RSI", L"RDI", L"RBP", L"RSP",
-                                  L"R8", L"R9", L"R10", L"R11", L"R12", L"R13", L"R14", L"R15", L"RIP" };
-        const unsigned long long values[] = {
-            registers->rax, registers->rbx, registers->rcx, registers->rdx,
-            registers->rsi, registers->rdi, registers->rbp, registers->rsp,
-            registers->r8, registers->r9, registers->r10, registers->r11,
-            registers->r12, registers->r13, registers->r14, registers->r15, registers->rip
-        };
-        int columns = main_w >= 43 ? 2 : 1;
-        for (size_t i = 0; i < _countof(values); i += columns) {
-            if (columns == 2 && i + 1 < _countof(values))
-                swprintf_s(lines[count++], _countof(lines[0]), L"%-3s %016llX  %-3s %016llX",
-                           names[i], values[i], names[i + 1], values[i + 1]);
-            else swprintf_s(lines[count++], _countof(lines[0]), L"%-3s %016llX", names[i], values[i]);
-        }
-        swprintf_s(lines[count++], _countof(lines[0]), L"EFLAGS %08X", registers->eflags);
-    } else {
-        wcscpy_s(lines[count++], _countof(lines[0]),
-                 state->paused ? L"Registers unavailable" : L"Registers: pause to read");
-    }
-    wcscpy_s(lines[count++], _countof(lines[0]), L"Breakpoints (index/type):");
-    int active = 0;
-    for (unsigned int i = 0; i < DEBUGGER_MAX_BREAKPOINTS; i++) {
-        const DebuggerBreakpoint *breakpoint = &state->breakpoints[i];
-        if (!breakpoint->active) continue;
-        active++;
-        swprintf_s(lines[count++], _countof(lines[0]), L"%2u %s %016llX", i,
-                   breakpoint->kind == DEBUGGER_SOFTWARE ? L"SW" : L"HW", breakpoint->address);
-        if (breakpoint->kind == DEBUGGER_HARDWARE)
-            swprintf_s(lines[count++], _countof(lines[0]), L"tid %u slot %u", breakpoint->thread_id, breakpoint->slot);
-    }
-    if (!active) wcscpy_s(lines[count++], _countof(lines[0]), L"None");
-    int visible = tui_state.height - 4 - CONTENT_START;
-    int max_scroll = count > visible ? count - visible : 0;
-    if (tui_state.debugger_scroll > max_scroll) tui_state.debugger_scroll = max_scroll;
-    for (int i = 0; i < visible && i + tui_state.debugger_scroll < count; i++)
-        screen_text(screen, main_x, CONTENT_START + i, lines[i + tui_state.debugger_scroll], s_attr_normal);
-    screen_text(screen, main_x, tui_state.height - 4, L"Up/Dn scroll  ? help", s_attr_border);
 }
 
 static void draw_scanner_panel(Screen *screen)
@@ -491,7 +427,7 @@ static void draw_scanner_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > row) {
         screen_text(screen, main_x, help_row,
-                    L"Up/Dn select  a addentry  ? help   type <name>  scan <v>  next <v>",
+                    L"k watch  a addentry  Up/Dn select  ? help",
                     s_attr_border);
     }
 }
@@ -572,7 +508,7 @@ static void draw_address_table_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > CONTENT_START) {
         screen_text(screen, main_x, help_row,
-                    L"d del  l lock  u unlock  e label  r read  w write  v hex  ? help",
+                    L"k watch  d del  l lock  u unlock  e label  v hex  ? help",
                     s_attr_border);
     }
 }
@@ -1023,7 +959,11 @@ static void handle_key(WORD vk, WCHAR ch)
             }
         }
         if (tui_state.panel == PANEL_SCANNER) {
-            if (ch == L'?') {
+            if (ch == L'k' && !tui_scan_is_running() && tui_state.scanner.has_results &&
+                (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
+                tui_watch_value(tui_state.scanner.results.addresses[tui_state.scanner_selected_index],
+                                tui_state.scanner.results_type);
+            } else if (ch == L'?') {
                 tui_open_help();
             } else if (vk == VK_UP && tui_state.scanner_selected_index > 0) {
                 tui_state.scanner_selected_index--;
@@ -1052,7 +992,10 @@ static void handle_key(WORD vk, WCHAR ch)
         }
         if (tui_state.panel == PANEL_ADDRTABLE) {
             size_t count = tui_state.address_table.count;
-            if (vk == VK_UP && tui_state.address_table_selected > 0) {
+            if (ch == L'k' && count > 0) {
+                const AddrEntry *entry = &tui_state.address_table.entries[tui_state.address_table_selected];
+                tui_watch_value(entry->address, entry->type);
+            } else if (vk == VK_UP && tui_state.address_table_selected > 0) {
                 tui_state.address_table_selected--;
                 if (tui_state.address_table_selected < tui_state.address_table_scroll)
                     tui_state.address_table_scroll = tui_state.address_table_selected;
@@ -1213,17 +1156,7 @@ static void handle_key(WORD vk, WCHAR ch)
                     tui_state.disasm_scroll = tui_state.disasm_selected - (size_t)visible_rows + 1;
             }
         }
-        if (tui_state.panel == PANEL_DEBUGGER) {
-            if (ch == L'?') tui_open_help();
-            else if (vk == VK_UP && tui_state.debugger_scroll > 0) tui_state.debugger_scroll--;
-            else if (vk == VK_DOWN) tui_state.debugger_scroll++;
-            else if (vk == VK_PRIOR) {
-                tui_state.debugger_scroll -= tui_state.height - 4 - CONTENT_START;
-                if (tui_state.debugger_scroll < 0) tui_state.debugger_scroll = 0;
-            } else if (vk == VK_NEXT) tui_state.debugger_scroll += tui_state.height - 4 - CONTENT_START;
-            else if (ch == L'd' && tui_state.debugger_state.paused && tui_state.debugger_state.registers_valid)
-                tui_disasm_jump(tui_state.debugger_state.registers.rip);
-        }
+        if (tui_state.panel == PANEL_DEBUGGER) tui_debugger_key(vk, ch);
         if (vk == VK_ESCAPE) {
             tui_state.focus = FOCUS_SIDEBAR;
         }
@@ -1347,23 +1280,6 @@ static void tick_disasm(void)
         tui_state.disasm_window_valid) return;
     refresh_disasm_window();
     tui_state.disasm_last_refresh = now;
-}
-
-static void tick_debugger(void)
-{
-    if (!tui_state.debugger) return;
-    int was_paused = tui_state.debugger_state.paused;
-    int success = tui_debugger_result(debugger_poll(tui_state.debugger), NULL);
-    debugger_get_state(tui_state.debugger, &tui_state.debugger_state);
-    if (!tui_state.debugger_state.attached) {
-        if (tui_detach_target()) tui_set_status(L"Target process exited -- debugger detached", TRUE);
-    } else if (success && !was_paused && tui_state.debugger_state.paused) {
-        tui_state.debugger_scroll = 0;
-        wchar_t message[80];
-        swprintf_s(message, _countof(message), L"Paused on thread %u; continue to resume",
-                   tui_state.debugger_state.thread_id);
-        tui_set_status(message, FALSE);
-    }
 }
 
 static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count)
