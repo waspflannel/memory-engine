@@ -48,18 +48,16 @@ PlatformError memory_query(const Target *target, unsigned long long address, Mem
         return PLATFORM_ERR_INVALID_PARAM;
     }
 
-    PlatformRegionInfo info = {0};
-    PlatformError err = platform_query_region(target->handle, address, &info);
-    if (err != PLATFORM_OK) {
-        return err;
-    }
+    return platform_query_region(target->handle, address, region);
+}
 
-    region->base    = info.base;
-    region->size    = info.size;
-    region->protect = info.protect;
-    region->state   = info.state;
-
-    return PLATFORM_OK;
+int memory_region_is_readable(const MemoryRegion *region)
+{
+    unsigned int protect = region->protect & 0xFFu;
+    return region->state == MEM_COMMIT && !(region->protect & PAGE_GUARD) &&
+           (protect == PAGE_READONLY || protect == PAGE_READWRITE ||
+            protect == PAGE_WRITECOPY || protect == PAGE_EXECUTE_READ ||
+            protect == PAGE_EXECUTE_READWRITE || protect == PAGE_EXECUTE_WRITECOPY);
 }
 
 static PlatformError validate_range(const Target *target, unsigned long long address,
@@ -86,14 +84,10 @@ static PlatformError validate_range(const Target *target, unsigned long long add
         }
 
         unsigned int base_protect = region.protect & 0xFFu;
-        int readable = base_protect == PAGE_READONLY || base_protect == PAGE_READWRITE ||
-                       base_protect == PAGE_WRITECOPY || base_protect == PAGE_EXECUTE_READ ||
-                       base_protect == PAGE_EXECUTE_READWRITE ||
-                       base_protect == PAGE_EXECUTE_WRITECOPY;
         int writable = base_protect == PAGE_READWRITE || base_protect == PAGE_WRITECOPY ||
                        base_protect == PAGE_EXECUTE_READWRITE ||
                        base_protect == PAGE_EXECUTE_WRITECOPY;
-        if ((require_write && !writable) || (!require_write && !readable)) {
+        if ((require_write && !writable) || (!require_write && !memory_region_is_readable(&region))) {
             return remaining == size ? access_error : partial_error;
         }
 

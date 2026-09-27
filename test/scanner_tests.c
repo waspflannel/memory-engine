@@ -22,13 +22,7 @@ static int find_addr(const ScanResults *r, unsigned long long addr)
 static int find_value_at(const ScanResults *r, unsigned long long addr,
                          const void *expected, size_t width)
 {
-    for (size_t i = 0; i < r->count; i++) {
-        if (r->addresses[i] == addr &&
-            r->value_width == width && memcmp(r->value, expected, width) == 0) {
-            return 1;
-        }
-    }
-    return 0;
+    return r->value_width == width && memcmp(r->value, expected, width) == 0 && find_addr(r, addr);
 }
 
 static int parse_addr(const char *buf, const char *name, unsigned long long *out)

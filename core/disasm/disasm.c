@@ -5,15 +5,6 @@
 #include "core/disasm/disasm.h"
 #include "core/memory/memory.h"
 
-#define MEM_COMMIT             0x00001000u
-#define PAGE_READONLY          0x00000002u
-#define PAGE_READWRITE         0x00000004u
-#define PAGE_WRITECOPY         0x00000008u
-#define PAGE_EXECUTE_READ      0x00000020u
-#define PAGE_EXECUTE_READWRITE 0x00000040u
-#define PAGE_EXECUTE_WRITECOPY 0x00000080u
-#define PAGE_GUARD             0x00000100u
-
 /* Forward declarations — definitions at bottom of file. */
 static void find_relative_target(const ZydisDecodedInstruction *instruction,
                                  const ZydisDecodedOperand *operands,
@@ -92,11 +83,7 @@ PlatformError disasm_read(const Target *target, unsigned long long address,
             return PLATFORM_ERR_QUERY_FAILED;
         }
 
-        unsigned int protect = region.protect & 0xFFu;
-        int readable = protect == PAGE_READONLY || protect == PAGE_READWRITE ||
-                       protect == PAGE_WRITECOPY || protect == PAGE_EXECUTE_READ ||
-                       protect == PAGE_EXECUTE_READWRITE || protect == PAGE_EXECUTE_WRITECOPY;
-        if (region.state != MEM_COMMIT || (region.protect & PAGE_GUARD) || !readable) {
+        if (!memory_region_is_readable(&region)) {
             if (window_size == 0) return PLATFORM_ERR_READ_FAILED;
             break;
         }

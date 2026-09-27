@@ -5,16 +5,6 @@
 #include <limits.h>
 #include "core/scanner/scanner.h"
 
-/* Duplicated Win32 values; the platform layer passes these through raw. */
-#define MEM_COMMIT             0x00001000u
-#define PAGE_READONLY          0x00000002u
-#define PAGE_READWRITE         0x00000004u
-#define PAGE_WRITECOPY         0x00000008u
-#define PAGE_EXECUTE_READ      0x00000020u
-#define PAGE_EXECUTE_READWRITE 0x00000040u
-#define PAGE_EXECUTE_WRITECOPY 0x00000080u
-#define PAGE_GUARD             0x00000100u
-
 #define SCAN_CHUNK_BYTES 65536
 
 #define SCAN_MAX_THREADS 8
@@ -344,14 +334,7 @@ static PlatformError list_regions(const Target *target, ScanRegion **regions, si
             return err;
         }
 
-        unsigned int base_protect = info.protect & 0xFFu;
-        int committed = (info.state == MEM_COMMIT);
-        int readable = base_protect == PAGE_READONLY || base_protect == PAGE_READWRITE ||
-                       base_protect == PAGE_WRITECOPY || base_protect == PAGE_EXECUTE_READ ||
-                       base_protect == PAGE_EXECUTE_READWRITE ||
-                       base_protect == PAGE_EXECUTE_WRITECOPY;
-        int accessible = readable && !(info.protect & PAGE_GUARD);
-        if (committed && accessible) {
+        if (memory_region_is_readable(&info)) {
             if (n >= cap) {
                 if (cap > SIZE_MAX / 2 || cap * 2 > SIZE_MAX / sizeof(*list)) {
                     free(list);
