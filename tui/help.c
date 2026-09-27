@@ -8,6 +8,7 @@ const HelpBook *tui_help_book_for_panel(int panel)
     if (panel == PANEL_ADDRTABLE) return &tui_help_address_table;
     if (panel == PANEL_HEXVIEW)   return &tui_help_hexview;
     if (panel == PANEL_DISASM)    return &tui_help_disasm;
+    if (panel == PANEL_DEBUGGER)  return &tui_help_debugger;
     return NULL;
 }
 

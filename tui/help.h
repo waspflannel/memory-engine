@@ -4,7 +4,7 @@
 #include <wchar.h>
 
 #define HELP_COUNT(a) ((int)(sizeof(a) / sizeof((a)[0])))
-#define TUI_COMMAND_HELP_COUNT 19
+#define TUI_COMMAND_HELP_COUNT 22
 
 typedef struct {
     const wchar_t *term;
@@ -29,6 +29,7 @@ extern const HelpBook tui_help_scanner;
 extern const HelpBook tui_help_address_table;
 extern const HelpBook tui_help_hexview;
 extern const HelpBook tui_help_disasm;
+extern const HelpBook tui_help_debugger;
 
 extern const HelpEntry tui_command_help_entries[TUI_COMMAND_HELP_COUNT];
 

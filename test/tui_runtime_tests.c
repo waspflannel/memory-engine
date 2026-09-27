@@ -93,6 +93,79 @@ static void test_selection_and_commands(void)
     scanner_session_init(&tui_state.scanner, &tui_state.target, SCAN_TYPE_I32);
 }
 
+static int screen_contains(const Screen *screen, const wchar_t *text)
+{
+    wchar_t row[121];
+    for (int y = CONTENT_START; y < screen->height - 3; y++) {
+        for (int x = 0; x < screen->width; x++) row[x] = screen->cells[y * screen->width + x].Char.UnicodeChar;
+        row[screen->width] = L'\0';
+        if (wcsstr(row, text)) return 1;
+    }
+    return 0;
+}
+
+static void test_debugger_panel(void)
+{
+    /* Rendering borrows a snapshot, not the debugger object. */
+    tui_state.debugger = (Debugger *)(UINT_PTR)1;
+    tui_state.debugger_state = (DebuggerState){.attached = 1, .watching = 1, .paused = 1,
+        .registers_valid = 1, .value_valid = 1, .address = 0x12340000, .size = 4,
+        .thread_id = 123, .before = {10}, .after = {9}, .registers.rip = 0x12345678};
+    tui_state.debugger_type = SCAN_TYPE_I32;
+    tui_state.debugger_disasm.count = 1;
+    tui_state.debugger_disasm.instructions[0].address = 0x12345678;
+    strcpy_s(tui_state.debugger_disasm.instructions[0].text, DISASM_TEXT_MAX, "ret");
+    tui_state.panel = PANEL_DEBUGGER;
+    tui_state.focus = FOCUS_MAIN;
+    const int sizes[][2] = {{80, 25}, {40, 10}};
+    for (size_t i = 0; i < _countof(sizes); i++) {
+        tui_state.width = sizes[i][0];
+        tui_state.height = sizes[i][1];
+        tui_state.debugger_scroll = 0;
+        Screen screen;
+        if (screen_alloc(&screen, tui_state.width, tui_state.height) != 0) {
+            check(0, "allocate debugger render fixture");
+            break;
+        }
+        const wchar_t *required[] = { L"Value changed", L"12340000", L"Type: i32", L"Before: 10", L"After: 9",
+            L"Stopped thread: 123", L"RAX", L"RBX", L"RCX", L"RDX", L"RSI", L"RDI", L"RBP", L"RSP",
+            L"R8", L"R9", L"R10", L"R11", L"R12", L"R13", L"R14", L"R15", L"RIP 0000000012345678", L"EFLAGS", L"ret" };
+        int found[_countof(required)] = {0};
+        for (int scroll = 0; scroll < 60; scroll++) {
+            screen_clear(&screen, s_attr_normal);
+            tui_draw_debugger(&screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
+            check(screen_contains(&screen, L"[C] Continue") && screen_contains(&screen, L"[S] Stop watching") &&
+                  screen_contains(&screen, L"[D] Detach"), "all three watch actions remain visible while scrolling");
+            for (size_t j = 0; j < _countof(required); j++)
+                if (screen_contains(&screen, required[j])) found[j] = 1;
+            handle_key(VK_DOWN, 0);
+        }
+        for (size_t j = 0; j < _countof(required); j++)
+            check(found[j], "watch values, disassembly and all registers reachable at both console sizes");
+        tui_state.debugger_scroll = 0;
+        tui_state.debugger_state.registers_valid = 0;
+        int unavailable = 0, stale = 0;
+        for (int scroll = 0; scroll < 15; scroll++) {
+            screen_clear(&screen, s_attr_normal);
+            tui_draw_debugger(&screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
+            unavailable |= screen_contains(&screen, L"Registers unavailable");
+            stale |= screen_contains(&screen, L"RAX");
+            handle_key(VK_DOWN, 0);
+        }
+        check(unavailable && !stale, "invalid register snapshot never displays stale registers");
+        tui_state.debugger_state.registers_valid = 1;
+        screen_free(&screen);
+    }
+    tui_state.address_table_last_refresh = 1000;
+    tui_state.address_table_last_lock = 1000;
+    check(tui_next_wait_timeout(1000) == 20, "watch limits input wait to twenty milliseconds");
+    tui_state.debugger = NULL;
+    tui_state.debugger_state = (DebuggerState){0};
+    tui_state.panel = PANEL_PROCESSES;
+    tui_state.width = 80;
+    tui_state.height = 25;
+}
+
 static void seed_next_scan(int *candidate)
 {
     scanner_session_destroy(&tui_state.scanner);
@@ -164,6 +237,7 @@ int main(void)
     addr_table_init(&tui_state.address_table, &tui_state.target);
     scanner_session_init(&tui_state.scanner, &tui_state.target, SCAN_TYPE_I32);
     test_selection_and_commands();
+    test_debugger_panel();
     test_scan_lifecycle();
     addr_table_destroy(&tui_state.address_table);
     printf("\n%d failure(s)\n", failures);

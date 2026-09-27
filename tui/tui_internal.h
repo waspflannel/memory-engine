@@ -16,7 +16,11 @@
 #include "core/address_table/address_table.h"
 #include "core/hexview/hexview.h"
 #include "core/disasm/disasm.h"
+#include "core/debugger/debugger.h"
 #include "tui/help.h"
+#include "tui/render.h"
+
+enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
 
 /* Sizes shared by the tui_state definition (tui.c) and the helpers that touch
    its buffers. Keep these here so the struct field width and the bound checks
@@ -83,6 +87,13 @@ typedef struct {
     ULONGLONG          disasm_last_refresh;
     int                disasm_window_valid;
 
+    Debugger          *debugger;
+    DebuggerState      debugger_state;
+    int                debugger_scroll;
+    ScanType           debugger_type;
+    DisasmResult       debugger_disasm;
+    PlatformError      debugger_disasm_error;
+
     int             help_open;
     int             help_tab;
     int             help_scroll;
@@ -104,7 +115,8 @@ extern TuiState tui_state;
 /* helpers.c -- shared app state + scan-value parsing. */
 void           tui_set_status(const wchar_t *msg, int is_error);
 int            tui_refresh_process_list(void);
-void           tui_detach_target(void);
+int            tui_detach_target(void);
+int            tui_debugger_result(DebuggerError error, const wchar_t *success);
 int            tui_do_attach(DWORD pid);
 void           tui_attach_to_selected(void);
 void           tui_hexview_jump(unsigned long long address);
@@ -119,6 +131,14 @@ int            tui_open_help(void);
    produces the identity view (every process shown). */
 void           tui_set_process_filter(const wchar_t *needle);
 DWORD          tui_next_wait_timeout(ULONGLONG now);
+
+/* debugger.c -- single-value watch screen and actions. */
+void tui_watch_value(unsigned long long address, ScanType type);
+void tui_continue_watch(void);
+void tui_stop_watch(void);
+void tui_tick_debugger(void);
+void tui_draw_debugger(Screen *screen, int x, int top, int bottom);
+void tui_debugger_key(WORD vk, WCHAR ch);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
 void           tui_exec_command(void);

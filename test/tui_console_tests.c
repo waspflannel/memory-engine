@@ -12,6 +12,8 @@ static volatile LONG fixture[32] = { 19088743 };
 static HANDLE console_input;
 static HANDLE console_output;
 static HANDLE application;
+static HANDLE debug_target;
+static HANDLE debug_input;
 static wchar_t snapshot[(SCREEN_WIDTH + 1) * SCREEN_HEIGHT + 1];
 
 static int run_driver(const wchar_t *executable);
@@ -20,6 +22,8 @@ static int send_command(const wchar_t *command);
 static int wait_for_text(const wchar_t *text);
 static int read_screen(void);
 static void print_screen(void);
+static int start_debug_target(const wchar_t *application_path, DWORD *pid, unsigned int *thread_id,
+                              unsigned long long *code_address, unsigned long long *value_address);
 
 /* Isolate console attachment in a helper process: the caller's console and
    redirected standard handles remain untouched. The job owns both children. */
@@ -143,10 +147,69 @@ static int run_driver(const wchar_t *executable)
     if (!send_command(L"invalid_fixture_command") || !wait_for_text(L"Unknown command:")) goto cleanup;
     step = "cleared command stays empty after status expires";
     if (!wait_for_text(L" > ") || wcsstr(snapshot, L"invalid_fixture_command")) goto cleanup;
+    DWORD target_pid;
+    unsigned int thread_id;
+    unsigned long long code_address, value_address;
+    step = "start independent debugger fixture";
+    if (!start_debug_target(executable, &target_pid, &thread_id, &code_address, &value_address)) goto cleanup;
+    swprintf_s(command, _countof(command), L"attach %lu", target_pid);
+    step = "attach debugger fixture";
+    if (!send_command(command) || !wait_for_text(L"Attached to")) goto cleanup;
+    LONG initial_value = 19088743;
+    SIZE_T transferred;
+    DWORD written;
+    if (!WriteProcessMemory(debug_target, (LPVOID)(uintptr_t)value_address, &initial_value,
+                            sizeof(initial_value), &transferred) || transferred != sizeof(initial_value)) goto cleanup;
+    step = "scan selected watched value";
+    if (!send_command(L"scan 19088743") || !wait_for_text(L"First scan:")) goto cleanup;
+    /* Select Scanner from the sidebar, then k watches its selected result. */
+    if (!send_key(VK_ESCAPE, 0)) goto cleanup;
+    for (int i = 0; i < 8; i++) if (!send_key(VK_UP, 0)) goto cleanup;
+    if (!send_key(VK_DOWN, 0) || !send_key(VK_RETURN, 0) || !send_key(0, L'k') ||
+        !wait_for_text(L"Watching for changes")) goto cleanup;
+    step = "CPU write pauses with old/new values and next instruction";
+    if (!WriteFile(debug_input, "i", 1, &written, NULL) || written != 1 ||
+        !wait_for_text(L"After: 19088744") || !wcsstr(snapshot, L"Before: 19088743") ||
+        !wcsstr(snapshot, L"Next instructions (after write)") ||
+        !wcsstr(snapshot, L"[C] Continue") || !wcsstr(snapshot, L"[S] Stop watching") ||
+        !wcsstr(snapshot, L"[D] Detach")) goto cleanup;
+    wchar_t next_instruction[32];
+    swprintf_s(next_instruction, _countof(next_instruction), L"%016llX", code_address + 2);
+    if (!wcsstr(snapshot, next_instruction)) goto cleanup;
+    printf("Rendered watched-value change screen:\n");
+    print_screen();
+    step = "continue action watches next change";
+    if (!send_key(0, L'c') || !wait_for_text(L"Watching for changes") ||
+        !WriteFile(debug_input, "i", 1, &written, NULL) || written != 1 ||
+        !wait_for_text(L"After: 19088745") || !wcsstr(snapshot, L"Before: 19088744")) goto cleanup;
+    step = "stop watching keeps memory target attached";
+    if (!send_key(0, L's') || !wait_for_text(L"Stopped watching; target remains attached") ||
+        WaitForSingleObject(debug_target, 0) != WAIT_TIMEOUT) goto cleanup;
+    swprintf_s(command, _countof(command), L"read %llX 4", value_address);
+    if (!send_command(command) || !wait_for_text(L"69 45 23 01")) goto cleanup;
+    swprintf_s(command, _countof(command), L"addentry %llX i32 watch_fixture", value_address);
+    step = "address-table selected watch shortcut";
+    if (!send_command(command) || !wait_for_text(L"Added entry 1:")) goto cleanup;
+    /* addentry selects the new row; open AddrTable from the sidebar. */
+    if (!send_key(VK_ESCAPE, 0)) goto cleanup;
+    for (int i = 0; i < 8; i++) if (!send_key(VK_UP, 0)) goto cleanup;
+    if (!send_key(VK_DOWN, 0) || !send_key(VK_DOWN, 0) || !send_key(VK_RETURN, 0) || !send_key(0, L'k') ||
+        !wait_for_text(L"Watching for changes")) goto cleanup;
+    if (!WriteFile(debug_input, "i", 1, &written, NULL) || written != 1 ||
+        !wait_for_text(L"After: 19088746")) goto cleanup;
+    step = "detach action releases debugger and memory target";
+    if (!send_key(0, L'd') || !wait_for_text(L"[No process attached]") ||
+        WaitForSingleObject(debug_target, 0) != WAIT_TIMEOUT) goto cleanup;
+    step = "watch command and quit while active";
+    swprintf_s(command, _countof(command), L"attach %lu", target_pid);
+    if (!send_command(command) || !wait_for_text(L"Attached to")) goto cleanup;
+    swprintf_s(command, _countof(command), L"watch %llX i32", value_address);
+    if (!send_command(command) || !wait_for_text(L"Watching for changes")) goto cleanup;
     step = "quit through keyboard";
     if (!send_command(L"quit") || WaitForSingleObject(application, 5000) != WAIT_OBJECT_0) goto cleanup;
     DWORD exit_code;
     if (!GetExitCodeProcess(application, &exit_code) || exit_code != 0) goto cleanup;
+    if (WaitForSingleObject(debug_target, 0) != WAIT_TIMEOUT) goto cleanup;
     passed = 1;
 
 cleanup:
@@ -158,12 +221,64 @@ cleanup:
         TerminateProcess(application, 1);
         WaitForSingleObject(application, 5000);
     }
+    if (debug_input) CloseHandle(debug_input);
+    if (debug_target) {
+        if (WaitForSingleObject(debug_target, 2000) != WAIT_OBJECT_0) TerminateProcess(debug_target, 1);
+        CloseHandle(debug_target);
+    }
     if (console_input && console_input != INVALID_HANDLE_VALUE) CloseHandle(console_input);
     if (console_output && console_output != INVALID_HANDLE_VALUE) CloseHandle(console_output);
     FreeConsole();
     CloseHandle(application);
     printf("Console integration: %s\n", passed ? "passed" : "failed");
     return passed ? 0 : 1;
+}
+
+static int start_debug_target(const wchar_t *application_path, DWORD *pid, unsigned int *thread_id,
+                              unsigned long long *code_address, unsigned long long *value_address)
+{
+    wchar_t path[MAX_PATH];
+    if (wcsncpy_s(path, _countof(path), application_path, _TRUNCATE) != 0) return 0;
+    wchar_t *filename = wcsrchr(path, L'\\');
+    if (!filename) filename = wcsrchr(path, L'/');
+    filename = filename ? filename + 1 : path;
+    if (wcscpy_s(filename, _countof(path) - (size_t)(filename - path), L"debugger_target.exe") != 0) return 0;
+    SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+    HANDLE input_read = NULL, output_read = NULL, output_write = NULL;
+    int started = 0;
+    if (!CreatePipe(&input_read, &debug_input, &security, 0) ||
+        !CreatePipe(&output_read, &output_write, &security, 0) ||
+        !SetHandleInformation(debug_input, HANDLE_FLAG_INHERIT, 0) ||
+        !SetHandleInformation(output_read, HANDLE_FLAG_INHERIT, 0)) goto done;
+    STARTUPINFOW startup = {0};
+    PROCESS_INFORMATION child = {0};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = input_read;
+    startup.hStdOutput = output_write;
+    startup.hStdError = output_write;
+    if (!CreateProcessW(path, NULL, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &startup, &child)) goto done;
+    debug_target = child.hProcess;
+    *pid = child.dwProcessId;
+    CloseHandle(child.hThread);
+    char info[128];
+    DWORD count;
+    size_t length = 0;
+    ULONGLONG deadline = GetTickCount64() + 5000;
+    while (length < sizeof(info) - 1 && GetTickCount64() < deadline) {
+        DWORD available;
+        if (!PeekNamedPipe(output_read, NULL, 0, NULL, &available, NULL)) break;
+        if (!available) { Sleep(10); continue; }
+        if (!ReadFile(output_read, info + length, 1, &count, NULL) || count != 1) break;
+        if (info[length++] == '\n') break;
+    }
+    info[length] = '\0';
+    started = sscanf_s(info, "%u %llx %llx", thread_id, code_address, value_address) == 3;
+done:
+    if (input_read) CloseHandle(input_read);
+    if (output_read) CloseHandle(output_read);
+    if (output_write) CloseHandle(output_write);
+    return started;
 }
 
 static int send_key(WORD key, wchar_t character)
@@ -203,12 +318,15 @@ static int wait_for_text(const wchar_t *text)
 
 static int read_screen(void)
 {
+    wchar_t cells[SCREEN_WIDTH * SCREEN_HEIGHT];
+    DWORD read;
+    COORD origin = {0, 0};
+    /* Read one console frame; per-row calls can mix two different redraws. */
+    if (!ReadConsoleOutputCharacterW(console_output, cells, _countof(cells), origin, &read) ||
+        read != _countof(cells)) return 0;
     for (SHORT row = 0; row < SCREEN_HEIGHT; row++) {
-        COORD origin = {0, row};
-        DWORD read;
         wchar_t *line = snapshot + row * (SCREEN_WIDTH + 1);
-        if (!ReadConsoleOutputCharacterW(console_output, line, SCREEN_WIDTH, origin, &read) ||
-            read != SCREEN_WIDTH) return 0;
+        wmemcpy(line, cells + row * SCREEN_WIDTH, SCREEN_WIDTH);
         line[SCREEN_WIDTH] = L'\n';
     }
     snapshot[_countof(snapshot) - 1] = L'\0';

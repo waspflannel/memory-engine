@@ -10,9 +10,13 @@ add_library(memforge_core STATIC
     core/memory/memory.c
     core/hexview/hexview.c
     core/disasm/disasm.c
+    core/debugger/debugger.c
+    core/debugger/events.c
+    core/debugger/watch.c
     core/scanner/scanner.c
     core/address_table/address_table.c
     platform/platform.c
+    platform/debugger.c
 )
 
 add_library(memforge_zydis STATIC
@@ -29,6 +33,7 @@ add_executable(memforge
     tui/main.c
     tui/tui.c
     tui/commands.c
+    tui/debugger.c
     tui/helpers.c
     tui/scan_job.c
     tui/render.c
@@ -39,12 +44,18 @@ add_executable(memforge
     tui/help_books/address_table.c
     tui/help_books/hexview.c
     tui/help_books/disasm.c
+    tui/help_books/debugger.c
 )
 target_link_libraries(memforge PRIVATE memforge_core)
 
 add_executable(test_target
     test_target/main.c
 )
+
+add_executable(debugger_target test/debugger_target.c)
+add_executable(debugger_tests test/debugger_tests.c)
+target_link_libraries(debugger_tests PRIVATE memforge_core)
+add_dependencies(debugger_tests debugger_target)
 
 add_executable(core_tests
     test/core_tests.c
@@ -74,6 +85,8 @@ target_link_libraries(address_table_tests PRIVATE memforge_core)
 add_executable(tui_command_tests
     test/tui_command_tests.c
     tui/commands.c
+    tui/debugger.c
+    tui/render.c
     tui/helpers.c
     tui/scan_job.c
     tui/help.c
@@ -83,12 +96,14 @@ add_executable(tui_command_tests
     tui/help_books/address_table.c
     tui/help_books/hexview.c
     tui/help_books/disasm.c
+    tui/help_books/debugger.c
 )
 target_link_libraries(tui_command_tests PRIVATE memforge_core)
 
 add_executable(tui_runtime_tests
     test/tui_runtime_tests.c
     tui/commands.c
+    tui/debugger.c
     tui/helpers.c
     tui/scan_job.c
     tui/render.c
@@ -99,14 +114,16 @@ add_executable(tui_runtime_tests
     tui/help_books/address_table.c
     tui/help_books/hexview.c
     tui/help_books/disasm.c
+    tui/help_books/debugger.c
 )
 target_link_libraries(tui_runtime_tests PRIVATE memforge_core)
 
 add_executable(tui_console_tests test/tui_console_tests.c)
-add_dependencies(tui_console_tests memforge)
+add_dependencies(tui_console_tests memforge debugger_target)
 
 foreach(target memforge_zydis memforge_core memforge core_tests hexview_tests disasm_tests
-               scanner_tests address_table_tests tui_command_tests tui_runtime_tests tui_console_tests)
+               scanner_tests address_table_tests tui_command_tests tui_runtime_tests tui_console_tests
+               debugger_target debugger_tests)
     target_compile_options(${target} PRIVATE /W4 /WX /wd5105)
 endforeach()
 target_compile_options(test_target PRIVATE /W4 /WX)
@@ -115,6 +132,12 @@ enable_testing()
 add_test(NAME core_tests COMMAND core_tests)
 add_test(NAME hexview_tests COMMAND hexview_tests)
 add_test(NAME disasm_tests COMMAND disasm_tests)
+add_test(NAME debugger_tests COMMAND debugger_tests
+         WORKING_DIRECTORY $<TARGET_FILE_DIR:debugger_tests>)
+set_tests_properties(debugger_tests PROPERTIES TIMEOUT 45)
+add_test(NAME debugger_terminated_tests COMMAND debugger_tests --terminated-paused
+         WORKING_DIRECTORY $<TARGET_FILE_DIR:debugger_tests>)
+set_tests_properties(debugger_terminated_tests PROPERTIES TIMEOUT 15)
 # scanner_tests spawns test_target.exe as its child; run it next to the built
 # exes so the relative path resolves under a multi-config generator's Release
 # subdir.

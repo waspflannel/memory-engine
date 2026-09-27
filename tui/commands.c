@@ -35,6 +35,9 @@ static void cmd_saveentry(const wchar_t *args);
 static void cmd_loadentry(const wchar_t *args);
 static void cmd_hex(const wchar_t *args);
 static void cmd_disasm(const wchar_t *args);
+static void cmd_watch(const wchar_t *args);
+static void cmd_continue(const wchar_t *args);
+static void cmd_unwatch(const wchar_t *args);
 static const wchar_t *skip_spaces(const wchar_t *text);
 static int parse_unsigned(const wchar_t *text, int base, unsigned long long maximum,
                           unsigned long long *value, const wchar_t **tail);
@@ -60,6 +63,9 @@ static const Command commands[] = {
     { L"loadentry ", cmd_loadentry },
     { L"hex ", cmd_hex },
     { L"disasm ", cmd_disasm },
+    { L"watch ", cmd_watch },
+    { L"continue", cmd_continue },
+    { L"unwatch", cmd_unwatch },
 };
 
 /* ---- Public API (order matches tui_internal.h) ---- */
@@ -69,15 +75,14 @@ void tui_exec_command(void)
     if (tui_state.cmd_len == 0) return;
 
     if (wcscmp(tui_state.cmd_buf, L"quit") == 0 || wcscmp(tui_state.cmd_buf, L"exit") == 0) {
-        tui_state.running = FALSE;
+        if (tui_detach_target()) tui_state.running = FALSE;
         tui_clear_command();
         return;
     }
 
     if (wcscmp(tui_state.cmd_buf, L"detach") == 0) {
         if (tui_state.attached) {
-            tui_detach_target();
-            tui_set_status(L"Detached", FALSE);
+            if (tui_detach_target()) tui_set_status(L"Detached", FALSE);
         } else {
             tui_set_status(L"No process attached", TRUE);
         }
@@ -96,7 +101,10 @@ void tui_exec_command(void)
 
     for (size_t i = 0; i < _countof(commands); i++) {
         size_t prefix_length = wcslen(commands[i].prefix);
-        if (wcsncmp(tui_state.cmd_buf, commands[i].prefix, prefix_length) == 0) {
+        if (wcsncmp(tui_state.cmd_buf, commands[i].prefix, prefix_length) == 0 &&
+            (commands[i].prefix[prefix_length - 1] == L' ' ||
+             tui_state.cmd_buf[prefix_length] == L'\0' ||
+             tui_state.cmd_buf[prefix_length] == L' ')) {
             commands[i].handler(tui_state.cmd_buf + prefix_length);
             tui_clear_command();
             return;
@@ -534,6 +542,33 @@ static void cmd_disasm(const wchar_t *args)
     }
 
     tui_disasm_jump(address);
+}
+
+static void cmd_watch(const wchar_t *args)
+{
+    unsigned long long address;
+    const wchar_t *tail;
+    char name[16];
+    ScanType type;
+    if (!parse_unsigned(args, 16, UINTPTR_MAX, &address, &tail) ||
+        !narrow_ascii(skip_spaces(tail), name, sizeof(name)) ||
+        scanner_type_from_name(name, &type) != PLATFORM_OK) {
+        tui_set_status(L"usage: watch <hex_address> <numeric_type>", TRUE);
+        return;
+    }
+    tui_watch_value(address, type);
+}
+
+static void cmd_continue(const wchar_t *args)
+{
+    if (!tail_is_empty(args)) tui_set_status(L"usage: continue", TRUE);
+    else tui_continue_watch();
+}
+
+static void cmd_unwatch(const wchar_t *args)
+{
+    if (!tail_is_empty(args)) tui_set_status(L"usage: unwatch", TRUE);
+    else tui_stop_watch();
 }
 
 static const wchar_t *skip_spaces(const wchar_t *text)

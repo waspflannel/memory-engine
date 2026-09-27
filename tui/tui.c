@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <limits.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
@@ -31,8 +32,6 @@
 #define BOX_TLEFT  L'\x251C'
 #define BOX_TRIGHT L'\x2524'
 #define BOX_TTOP   L'\x252C'
-
-enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
 
 static const wchar_t *s_sidebar_labels[PANEL_COUNT] = {
     L"Processes",
@@ -77,6 +76,7 @@ static void read_input(DWORD timeout);
 static void tick_address_table(void);
 static void tick_hexview(void);
 static void tick_disasm(void);
+static void stop_after_console_failure(void);
 static int  update_console_size(void);
 static void hexview_layout(unsigned short *bytes_per_row, size_t *byte_count);
 static void refresh_hexview_window(void);
@@ -128,12 +128,13 @@ void tui_run(void)
 {
     while (tui_state.running) {
         tui_poll_scan();
+        tui_tick_debugger();
         tick_address_table();
         tick_hexview();
         tick_disasm();
         if (render() != 0) {
-            tui_state.running = FALSE;
-            break;
+            stop_after_console_failure();
+            continue;
         }
         ULONGLONG now = GetTickCount64();
         read_input(tui_next_wait_timeout(now));
@@ -142,6 +143,7 @@ void tui_run(void)
 
 void tui_shutdown(void)
 {
+    if (!tui_detach_target()) return;
     CONSOLE_CURSOR_INFO ci = {0};
     GetConsoleCursorInfo(tui_state.hOut, &ci);
     ci.bVisible = TRUE;
@@ -152,8 +154,6 @@ void tui_shutdown(void)
         mode |= ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
         SetConsoleMode(tui_state.hIn, mode);
     }
-
-    tui_detach_target();
 
     addr_table_destroy(&tui_state.address_table);
 
@@ -312,6 +312,8 @@ static void draw_main_panel(Screen *screen)
         draw_hexview_panel(screen);
     } else if (tui_state.panel == PANEL_DISASM) {
         draw_disasm_panel(screen);
+    } else if (tui_state.panel == PANEL_DEBUGGER) {
+        tui_draw_debugger(screen, SIDEBAR_WIDTH + 2, CONTENT_START, tui_state.height - 4);
     } else {
         screen_text(screen, main_x, CONTENT_START, L"Not yet implemented", s_attr_normal);
     }
@@ -425,7 +427,7 @@ static void draw_scanner_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > row) {
         screen_text(screen, main_x, help_row,
-                    L"Up/Dn select  a addentry  ? help   type <name>  scan <v>  next <v>",
+                    L"k watch  a addentry  Up/Dn select  ? help",
                     s_attr_border);
     }
 }
@@ -506,7 +508,7 @@ static void draw_address_table_panel(Screen *screen)
     int help_row = tui_state.height - 4;
     if (help_row > CONTENT_START) {
         screen_text(screen, main_x, help_row,
-                    L"d del  l lock  u unlock  e label  r read  w write  v hex  ? help",
+                    L"k watch  d del  l lock  u unlock  e label  v hex  ? help",
                     s_attr_border);
     }
 }
@@ -926,7 +928,7 @@ static void handle_key(WORD vk, WCHAR ch)
             tui_state.panel = tui_state.sidebar_idx;
             tui_state.focus = FOCUS_MAIN;
         } else if (ch == L'q' || ch == L'Q') {
-            tui_state.running = FALSE;
+            if (tui_detach_target()) tui_state.running = FALSE;
         }
         break;
 
@@ -957,7 +959,11 @@ static void handle_key(WORD vk, WCHAR ch)
             }
         }
         if (tui_state.panel == PANEL_SCANNER) {
-            if (ch == L'?') {
+            if (ch == L'k' && !tui_scan_is_running() && tui_state.scanner.has_results &&
+                (size_t)tui_state.scanner_selected_index < tui_state.scanner.results.count) {
+                tui_watch_value(tui_state.scanner.results.addresses[tui_state.scanner_selected_index],
+                                tui_state.scanner.results_type);
+            } else if (ch == L'?') {
                 tui_open_help();
             } else if (vk == VK_UP && tui_state.scanner_selected_index > 0) {
                 tui_state.scanner_selected_index--;
@@ -986,7 +992,10 @@ static void handle_key(WORD vk, WCHAR ch)
         }
         if (tui_state.panel == PANEL_ADDRTABLE) {
             size_t count = tui_state.address_table.count;
-            if (vk == VK_UP && tui_state.address_table_selected > 0) {
+            if (ch == L'k' && count > 0) {
+                const AddrEntry *entry = &tui_state.address_table.entries[tui_state.address_table_selected];
+                tui_watch_value(entry->address, entry->type);
+            } else if (vk == VK_UP && tui_state.address_table_selected > 0) {
                 tui_state.address_table_selected--;
                 if (tui_state.address_table_selected < tui_state.address_table_scroll)
                     tui_state.address_table_scroll = tui_state.address_table_selected;
@@ -1147,6 +1156,7 @@ static void handle_key(WORD vk, WCHAR ch)
                     tui_state.disasm_scroll = tui_state.disasm_selected - (size_t)visible_rows + 1;
             }
         }
+        if (tui_state.panel == PANEL_DEBUGGER) tui_debugger_key(vk, ch);
         if (vk == VK_ESCAPE) {
             tui_state.focus = FOCUS_SIDEBAR;
         }
@@ -1180,13 +1190,13 @@ static void read_input(DWORD timeout)
     if (wait == WAIT_TIMEOUT) return;
     if (wait != WAIT_OBJECT_0 || !ReadConsoleInputW(tui_state.hIn, records, INPUT_RECORD_BATCH, &count)) {
         tui_set_status(L"Console input failed", TRUE);
-        tui_state.running = FALSE;
+        stop_after_console_failure();
         return;
     }
 
-    for (DWORD i = 0; i < count; i++) {
+    for (DWORD i = 0; i < count && tui_state.running; i++) {
         if (records[i].EventType == WINDOW_BUFFER_SIZE_EVENT) {
-            if (!update_console_size()) tui_state.running = FALSE;
+            if (!update_console_size()) stop_after_console_failure();
             continue;
         }
         if (records[i].EventType != KEY_EVENT) continue;
@@ -1194,6 +1204,21 @@ static void read_input(DWORD timeout)
         handle_key(records[i].Event.KeyEvent.wVirtualKeyCode,
                    records[i].Event.KeyEvent.uChar.UnicodeChar);
     }
+}
+
+static void stop_after_console_failure(void)
+{
+    static int reported;
+    if (tui_detach_target()) {
+        tui_state.running = FALSE;
+        return;
+    }
+    if (!reported) {
+        fwprintf(stderr, L"Console failed; debugger cleanup failed: %s. Retaining session and retrying.\n",
+                 tui_state.status_msg);
+        reported = 1;
+    }
+    Sleep(250);
 }
 
 static void tick_address_table(void)
@@ -1204,8 +1229,7 @@ static void tick_address_table(void)
         int alive = 0;
         PlatformError alive_error = process_is_alive(&tui_state.target, &alive);
         if (alive_error != PLATFORM_OK || !alive) {
-            tui_detach_target();
-            tui_set_status(L"Target process exited -- locks disabled", TRUE);
+            if (tui_detach_target()) tui_set_status(L"Target process exited -- locks disabled", TRUE);
             return;
         }
         addr_table_refresh(&tui_state.address_table);
