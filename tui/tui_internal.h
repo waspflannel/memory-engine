@@ -32,7 +32,7 @@ enum { FOCUS_SIDEBAR, FOCUS_MAIN, FOCUS_COMMAND };
 #define HEXVIEW_REFRESH_INTERVAL_MS 200
 
 enum { PANEL_PROCESSES, PANEL_SCANNER, PANEL_ADDRTABLE, PANEL_HEXVIEW,
-       PANEL_DISASM, PANEL_DEBUGGER, PANEL_SCRIPTS, PANEL_PROFILES,
+       PANEL_DISASM, PANEL_DEBUGGER, PANEL_POINTERS, PANEL_STRUCTURE, PANEL_SCRIPTS, PANEL_PROFILES,
        PANEL_COUNT };
 
 /* The TUI's module singleton. Defined in tui.c; the draw/input/commands code
@@ -122,6 +122,7 @@ void           tui_attach_to_selected(void);
 void           tui_hexview_jump(unsigned long long address);
 void           tui_disasm_jump(unsigned long long address);
 const wchar_t *tui_scan_type_name(ScanType type);
+void           tui_format_numeric_value(wchar_t *output, size_t capacity, ScanType type, const unsigned char *bytes);
 int            tui_parse_scan_value(const wchar_t *args, ScanValue *out);
 int            tui_hex_digit_value(wchar_t c);
 int            tui_open_help(void);
@@ -139,6 +140,26 @@ void tui_stop_watch(void);
 void tui_tick_debugger(void);
 void tui_draw_debugger(Screen *screen, int x, int top, int bottom);
 void tui_debugger_key(WORD vk, WCHAR ch);
+
+/* Focused memory tools; each owns its transient state. */
+void tui_injection_start(const wchar_t *path);
+void tui_injection_poll(void);
+int  tui_injection_is_running(void);
+int  tui_injection_release(void);
+void tui_pointer_start(unsigned long long address, unsigned int depth, unsigned int max_offset);
+void tui_pointer_poll(void);
+int  tui_pointer_is_running(void);
+void tui_pointer_cancel(void);
+void tui_pointer_reset(void);
+void tui_pointer_filter(unsigned long long address);
+void tui_pointer_draw(Screen *screen, int x, int top, int bottom);
+void tui_pointer_key(WORD vk, WCHAR ch);
+void tui_structure_open(unsigned long long address, size_t size);
+void tui_structure_field(size_t offset, ScanType type, const wchar_t *label);
+void tui_structure_refresh(void);
+void tui_structure_reset(void);
+void tui_structure_draw(Screen *screen, int x, int top, int bottom);
+void tui_structure_key(WORD vk, WCHAR ch);
 
 /* commands.c -- command palette dispatcher (called from input in tui.c). */
 void           tui_exec_command(void);

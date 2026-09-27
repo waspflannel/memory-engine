@@ -6,12 +6,13 @@
 #include <wctype.h>
 
 static void focus_watch(void);
-static void format_value(wchar_t *output, size_t capacity, const unsigned char *bytes);
+
 
 void tui_watch_value(unsigned long long address, ScanType type)
 {
     unsigned int size = scanner_type_width(type);
     if (!tui_state.attached) { tui_set_status(L"No process attached", TRUE); return; }
+    if (tui_injection_is_running()) { tui_set_status(L"Wait for DLL loading before watching", TRUE); return; }
     if (tui_state.debugger) { tui_set_status(L"Already watching; stop watching first", TRUE); return; }
     if (!size || size > 8) { tui_set_status(L"Watch requires a numeric value", TRUE); return; }
     tui_state.debugger_type = type;
@@ -97,9 +98,9 @@ void tui_draw_debugger(Screen *screen, int x, int top, int bottom)
         swprintf_s(lines[count++], _countof(lines[0]), L"Type: %s", tui_scan_type_name(tui_state.debugger_type));
         if (state->value_valid) {
             wchar_t value[64];
-            format_value(value, _countof(value), state->before);
+            tui_format_numeric_value(value, _countof(value), tui_state.debugger_type, state->before);
             swprintf_s(lines[count++], _countof(lines[0]), L"Before: %s", value);
-            format_value(value, _countof(value), state->after);
+            tui_format_numeric_value(value, _countof(value), tui_state.debugger_type, state->after);
             swprintf_s(lines[count++], _countof(lines[0]), L"After: %s", value);
         }
         if (state->paused) {
@@ -153,23 +154,4 @@ static void focus_watch(void)
     tui_state.focus = FOCUS_MAIN;
     tui_state.help_open = 0;
     tui_state.debugger_scroll = 0;
-}
-
-static void format_value(wchar_t *output, size_t capacity, const unsigned char *bytes)
-{
-#define VALUE(kind, format) { kind value; memcpy(&value, bytes, sizeof(value)); swprintf_s(output, capacity, format, value); break; }
-    switch (tui_state.debugger_type) {
-    case SCAN_TYPE_I8: VALUE(int8_t, L"%d")
-    case SCAN_TYPE_I16: VALUE(int16_t, L"%d")
-    case SCAN_TYPE_I32: VALUE(int32_t, L"%d")
-    case SCAN_TYPE_I64: VALUE(int64_t, L"%lld")
-    case SCAN_TYPE_U8: VALUE(uint8_t, L"%u")
-    case SCAN_TYPE_U16: VALUE(uint16_t, L"%u")
-    case SCAN_TYPE_U32: VALUE(uint32_t, L"%u")
-    case SCAN_TYPE_U64: VALUE(uint64_t, L"%llu")
-    case SCAN_TYPE_F32: VALUE(float, L"%.9g")
-    case SCAN_TYPE_F64: VALUE(double, L"%.17g")
-    default: wcscpy_s(output, capacity, L"?"); break;
-    }
-#undef VALUE
 }

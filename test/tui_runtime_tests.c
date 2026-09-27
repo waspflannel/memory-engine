@@ -227,6 +227,45 @@ static void test_scan_lifecycle(void)
     check(!tui_state.scanner.has_results, "cancelled work cannot republish results after detach");
 }
 
+static void test_structure_panel(void)
+{
+    int values[64] = {10};
+    const int sizes[][2] = {{80, 25}, {40, 10}};
+    for (size_t size = 0; size < _countof(sizes); size++) {
+        tui_state.width = sizes[size][0];
+        tui_state.height = sizes[size][1];
+        values[0] = 10;
+        tui_structure_open((unsigned long long)(UINT_PTR)values, sizeof(values));
+        tui_structure_field(0, SCAN_TYPE_I32, L"health");
+        values[0] = 11;
+        handle_key(0, L'r');
+        Screen screen;
+        if (screen_alloc(&screen, tui_state.width, tui_state.height) != 0) {
+            check(0, "allocate structure screen");
+            continue;
+        }
+        int found_value = 0, found_last = 0, footer_visible = 1;
+        for (int scroll = 0; scroll < 160; scroll++) {
+            screen_clear(&screen, s_attr_normal);
+            draw_main_panel(&screen);
+            found_value |= screen_contains(&screen, L"* +0000 health (i32): 11");
+            found_last |= screen_contains(&screen, L"+00FC");
+            footer_visible &= screen_contains(&screen, L"[R] Refresh");
+            handle_key(VK_DOWN, 0);
+        }
+        check(found_value && found_last && footer_visible, "structure values, final offset and refresh accessible at both console sizes");
+        screen_clear(&screen, s_attr_normal);
+        tui_state.focus = FOCUS_SIDEBAR;
+        draw_sidebar(&screen);
+        check(screen_contains(&screen, L"Structure"), "selected new sidebar panel stays visible at minimum size");
+        screen_free(&screen);
+    }
+    tui_structure_reset();
+    tui_state.width = 80;
+    tui_state.height = 25;
+    tui_state.focus = FOCUS_COMMAND;
+}
+
 int main(void)
 {
     tui_state.target.handle = GetCurrentProcess();
@@ -238,6 +277,7 @@ int main(void)
     scanner_session_init(&tui_state.scanner, &tui_state.target, SCAN_TYPE_I32);
     test_selection_and_commands();
     test_debugger_panel();
+    test_structure_panel();
     test_scan_lifecycle();
     addr_table_destroy(&tui_state.address_table);
     printf("\n%d failure(s)\n", failures);
