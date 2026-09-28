@@ -17,6 +17,8 @@ some features
 Build and run
 Requires Windows x64, CMake, and Visual Studio Build Tools with the Desktop development with C++ workload.
 From the repository directory containing CMakeLists.txt:
+```powershell
 cmake -S . -B build -A x64
 cmake --build build --config Release
 .\build\Release\memforge.exe
+```
